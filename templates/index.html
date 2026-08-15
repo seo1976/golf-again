@@ -146,11 +146,16 @@ mns: repeat(auto-fit, minmax(220px, 1fr));
         </p>
 
         <div class="buttons">
-            <a class="btn primary"
- href="/listings">상품 둘러보기</a>
-            <a class="btn secondary" href="/register">회원가입</a>
-            <a class="btn secondary" href="/login">로그인</a>
-        </div>
+    <a class="btn primary" href="/listings">상품 둘러보기</a>
+
+    {% if session.get("user_id") %}
+        <span class="btn secondary">{{ session.get("nickname") }}님</span>
+        <a class="btn secondary" href="/logout">로그아웃</a>
+    {% else %}
+        <a class="btn secondary" href="/register">회원가입</a>
+        <a class="btn secondary" href="/login">로그인</a>
+    {% endif %}
+</div>
     </section>
 
     <h2 class="section-title">GOLF AGAIN</h2>
