@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>상품 둘러보기 | GOLF AGAIN</title>
+
+    <style>
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            font-family: Arial, "Apple SD Gothic Neo", sans-serif;
+            background: #f5f6f5;
+            color: #222;
+        }
+
+        header {
+            background: #145c35;
+            color: white;
+            padding: 22px 20px;
+        }
+
+        .header-inner {
+            max-width: 1000px;
+            margin: auto;
+        }
+
+        .logo {
+            font-size: 28px;
+            font-weight: 800;
+            letter-spacing: 3px;
+        }
+
+        .subtitle {
+            margin-top: 5px;
+            font-size: 13px;
+            opacity: .85;
+        }
+
+        .container {
+            max-width: 1000px;
+            margin: auto;
+            padding: 25px 16px 50px;
+        }
+
+        .top {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+
+        h1 {
+            font-size: 24px;
+            margin: 0;
+        }
+
+        .home {
+            text-decoration: none;
+            color: #145c35;
+            font-weight: bold;
+        }
+
+        .search-box {
+            background: white;
+            padding: 16px;
+            border-radius: 14px;
+            margin-bottom: 22px;
+        }
+
+        .search-form {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+
+        input, select {
+            padding: 12px;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            font-size: 15px;
+            flex: 1;
+            min-width: 130px;
+        }
+
+        button {
+            border: 0;
+            background: #145c35;
+            color: white;
+            padding: 12px 18px;
+            border-radius: 8px;
+            font-weight: bold;
+            cursor: pointer;
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 16px;
+        }
+
+        .card {
+            display: block;
+            background: white;
+            border-radius: 14px;
+            overflow: hidden;
+            text-decoration: none;
+            color: inherit;
+            box-shadow: 0 2px 8px rgba(0,0,0,.06);
+        }
+
+        .photo {
+            width: 100%;
+            aspect-ratio: 4 / 3;
+            background: #e8ebe8;
+            object-fit: cover;
+            display: block;
+        }
+
+        .no-photo {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #888;
+        }
+
+        .info {
+            padding: 14px;
+        }
+
+        .category {
+            font-size: 12px;
+            color: #777;
+            margin-bottom: 6px;
+        }
+
+        .title {
+            font-size: 17px;
+            font-weight: bold;
+            margin-bottom: 8px;
+        }
+
+        .price {
+            font-size: 18px;
+            font-weight: 800;
+            color: #145c35;
+        }
+
+        .meta {
+            font-size: 13px;
+            color: #777;
+            margin-top: 8px;
+        }
+
+        .empty {
+            background: white;
+            padding: 45px 20px;
+            border-radius: 14px;
+            text-align: center;
+            color: #777;
+        }
+
+        @media (max-width: 700px) {
+            .grid {
+                grid-template-columns: repeat(2, 1fr);
+                gap: 10px;
+            }
+
+            .container {
+                padding: 20px 12px 40px;
+            }
+
+            .logo {
+                font-size: 24px;
+            }
+
+            h1 {
+                font-size: 21px;
+            }
+
+            .info {
+                padding: 11px;
+            }
+
+            .title {
+                font-size: 15px;
+            }
+
+            .price {
+                font-size: 16px;
+            }
+        }
+    </style>
+</head>
+
+<body>
+
+<header>
+    <div class="header-inner">
+        <div class="logo">GOLF AGAIN</div>
+        <div class="subtitle">골프용품 중고거래 플랫폼</div>
+    </div>
+</header>
+
+<div class="container">
+
+    <div class="top">
+        <h1>⛳ 상품 둘러보기</h1>
+        <a class="home" href="{{ url_for('index') }}">홈으로</a>
+    </div>
+
+    <div class="search-box">
+        <form class="search-form" method="GET" action="{{ url_for('listings') }}">
+
+            <input
+                type="text"
+                name="q"
+                placeholder="상품명, 브랜드 검색"
+                value="{{ request.args.get('q', '') }}"
+            >
+
+            <select name="category">
+                <option value="">전체 카테고리</option>
+                <option value="골프채">골프채</option>
+                <option value="골프백">골프백</option>
+                <option value="골프공">골프공</option>
+                <option value="의류">의류</option>
+                <option value="신발">신발</option>
+                <option value="기타">기타</option>
+            </select>
+
+            <button type="submit">검색</button>
+
+        </form>
+    </div>
+
+    {% if items %}
+
+    <div class="grid">
+
+        {% for item in items %}
+
+        <a class="card" href="{{ url_for('item', item_id=item['id']) }}">
+
+            {% if item['image'] %}
+
+            <img
+                class="photo"
+                src="{{ url_for('static', filename='uploads/' + item['image']) }}"
+                alt="{{ item['title'] }}"
+            >
+
+            {% else %}
+
+            <div class="photo no-photo">
+                사진 없음
+            </div>
+
+            {% endif %}
+
+            <div class="info">
+
+                <div class="category">
+                    {{ item['category'] }}
+                    {% if item['brand'] %}
+                    · {{ item['brand'] }}
+                    {% endif %}
+                </div>
+
+                <div class="title">
+                    {{ item['title'] }}
+                </div>
+
+                <div class="price">
+                    {{ "{:,}".format(item['price']) }}원
+                </div>
+
+                <div class="meta">
+                    {% if item['region'] %}
+                    📍 {{ item['region'] }}
+                    {% endif %}
+
+                    {% if item['fav_count'] %}
+                    &nbsp; ♥ {{ item['fav_count'] }}
+                    {% endif %}
+                </div>
+
+            </div>
+
+        </a>
+
+        {% endfor %}
+
+    </div>
+
+    {% else %}
+
+    <div class="empty">
+        아직 등록된 상품이 없습니다.
+    </div>
+
+    {% endif %}
+
+</div>
+
+</body>
+</html>
