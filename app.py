@@ -54,7 +54,7 @@ def init_db():
     """)
     conn.commit()
     conn.close()
-
+init_db()
 def login_required(f):
     @wraps(f)
     def wrap(*a, **kw):
