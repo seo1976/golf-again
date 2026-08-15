@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GOLF AGAIN</title>
+
+    <style>
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            font-family: Arial, sans-serif;
+            background: #f5f5f5;
+            color: #222;
+        }
+
+        header {
+            background: #174d2b;
+            color: white;
+            padding: 22px 18px;
+            text-align: center;
+        }
+
+        header h1 {
+            margin: 0;
+            font-size: 30px;
+            letter-spacing: 2px;
+        }
+
+        header p {
+            margin: 7px 0 0;
+            font-size: 14px;
+        }
+
+        .container {
+            max-width: 900px;
+            margin: auto;
+            padding: 20px 15px;
+        }
+
+        .hero {
+            background: white;
+            border-radius: 14px;
+            padding: 28px 20px;
+            margin
+-bottom: 20px;
+            text-align: center;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+        }
+
+        .hero h2 {
+            margin-top: 0;
+            color: #174d2b;
+        }
+
+        .hero p {
+            line-height: 1.7;
+            color: #555;
+        }
+
+        .buttons {
+            display: flex;
+            gap: 10px;
+            justify-content: center;
+            flex-wrap: wrap;
+            margin-top: 20px;
+        }
+
+        .btn {
+            display: inline-block;
+            padding: 13px 20px;
+            border-radius: 8px;
+            text-decoration: none;
+            font-weight: bold;
+        }
+
+        .primary {
+            background: #174d2b;
+            color: white;
+        }
+
+        .secondary {
+            background: #e8eee9;
+            color: #174d2b;
+        }
+
+        .section-title {
+            margin: 28px 0 14px;
+            font-size: 21px;
+        }
+
+        .cards {
+            display: grid;
+            grid-template-colu
+mns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 14px;
+        }
+
+        .card {
+            background: white;
+            border-radius: 12px;
+            padding: 18px;
+            box-shadow: 0 2px 7px rgba(0,0,0,0.07);
+        }
+
+        .card h3 {
+            margin-top: 0;
+            color: #174d2b;
+        }
+
+        .card p {
+            font-size: 14px;
+            color: #666;
+            line-height: 1.6;
+        }
+
+        footer {
+            margin-top: 35px;
+            padding: 25px 15px;
+            text-align: center;
+            background: #222;
+            color: #aaa;
+            font-size: 13px;
+        }
+    </style>
+</head>
+
+<body>
+
+<header>
+    <h1>GOLF AGAIN</h1>
+    <p>골프용품 중고거래 플랫폼</p>
+</header>
+
+<div class="container">
+
+    <section class="hero">
+        <h2>좋은 골프용품, 다시 필드로 ⛳</h2>
+
+        <p>
+            사용하지 않는 골프용품을 판매하고<br>
+            필요한 골프용품을 합리적인 가격에 만나보세요.
+        </p>
+
+        <div class="buttons">
+            <a class="btn primary"
+ href="/listings">상품 둘러보기</a>
+            <a class="btn secondary" href="/register">회원가입</a>
+            <a class="btn secondary" href="/login">로그인</a>
+        </div>
+    </section>
+
+    <h2 class="section-title">GOLF AGAIN</h2>
+
+    <div class="cards">
+
+        <div class="card">
+            <h3>🏌️ 골프채</h3>
+            <p>
+                드라이버, 아이언, 웨지, 퍼터 등
+                다양한 중고 골프채를 거래하세요.
+            </p>
+        </div>
+
+        <div class="card">
+            <h3>🎒 골프백</h3>
+            <p>
+                캐디백, 스탠드백 등
+                상태 좋은 골프백을 만나보세요.
+            </p>
+        </div>
+
+        <div class="card">
+            <h3>👕 골프웨어</h3>
+            <p>
+                골프 의류와 액세서리도
+                간편하게 등록하고 거래할 수 있습니다.
+            </p>
+        </div>
+
+    </div>
+
+</div>
+
+<footer>
+    © 2026 GOLF AGAIN
+</footer>
+
+</body>
+</html>
