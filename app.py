@@ -99,7 +99,44 @@ def index():
         favs={r["listing_id"] for r in conn.execute("SELECT listing_id FROM favorites WHERE user_id=?", (session["user_id"],))}
     conn.close()
     return render_template("index.html", items=items, favs=favs, q=q, category=category)
+@app.route("/listings")
+def listings():
+    q = request.args.get("q", "").strip()
+    category = request.args.get("category", "").strip()
 
+    conn = db()
+    sql = """SELECT listings.*, users.nickname,
+             (SELECT COUNT(*) FROM favorites
+              WHERE favorites.listing_id = listings.id) AS favorite_count
+             FROM listings
+             JOIN users ON users.id = listings.user_id
+             WHERE listings.status = '판매중'"""
+    params = []
+
+    if q:
+        sql += " AND (listings.title LIKE ? OR listings.brand LIKE ? OR listings.description LIKE ?)"
+        like = f"%{q}%"
+        params += [like, like, like]
+
+    if category:
+        sql += " AND listings.category=?"
+        params.append(category)
+
+    sql += " ORDER BY listings.id DESC"
+    items = conn.execute(sql, params).fetchall()
+
+    favs = set()
+    if "user_id" in session:
+        favs = {
+            r["listing_id"]
+            for r in conn.execute(
+                "SELECT listing_id FROM favorites WHERE user_id=?",
+                (session["user_id"],)
+            ).fetchall()
+        }
+
+    conn.close()
+    return render_template("listings.html", items=items, favs=favs, q=q, category=category)
 @app.route("/register", methods=["GET","POST"])
 def register():
     if request.method=="POST":
