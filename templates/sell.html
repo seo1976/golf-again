@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>상품 등록 | GOLF AGAIN</title>
+  <style>
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      font-family: Arial, "Apple SD Gothic Neo", sans-serif;
+      background: #f5f6f5;
+      color: #222;
+    }
+
+    .header {
+      background: #064b2b;
+      color: white;
+      padding: 28px 20px;
+      text-align: center;
+    }
+
+    .header h1 {
+      margin: 0;
+      letter-spacing: 4px;
+      font-size: 28px;
+    }
+
+    .header p {
+      margin: 8px 0 0;
+      opacity: .85;
+    }
+
+    .container {
+      max-width: 650px;
+      margin: 25px auto;
+      padding: 0 18px;
+    }
+
+    .card {
+      background: white;
+      padding: 25px;
+      border-radius: 18px;
+      box-shadow: 0 5px 20px rgba(0,0,0,.06);
+    }
+
+    h2 {
+      margin-top: 0;
+    }
+
+    label {
+      display: block;
+      margin-top: 17px;
+      margin-bottom: 7px;
+      font-weight: bold;
+    }
+
+    input, select, textarea {
+      width: 100%;
+      padding: 13px;
+      border: 1px solid #ddd;
+      border-radius: 10px;
+      font-size: 16px;
+      background: white;
+    }
+
+    textarea {
+      min-height: 120px;
+      resize: vertical;
+    }
+
+    button {
+      width: 100%;
+      margin-top: 24px;
+      padding: 15px;
+      border: 0;
+      border-radius: 12px;
+      background: #07532f;
+      color: white;
+      font-size: 18px;
+      font-weight: bold;
+    }
+
+    .back {
+      display: block;
+      text-align: center;
+      margin-top: 18px;
+      color: #07532f;
+      text-decoration: none;
+      font-weight: bold;
+    }
+  </style>
+</head>
+
+<body>
+
+  <div class="header">
+    <h1>GOLF AGAIN</h1>
+    <p>골프용품 중고거래 플랫폼</p>
+  </div>
+
+  <div class="container">
+    <div class="card">
+
+      <h2>⛳ 상품 등록</h2>
+
+      <form method="POST" enctype="multipart/form-data">
+
+        <label>상품명</label>
+        <input type="text" name="title" required>
+
+        <label>카테고리</label>
+        <select name="category" required>
+          <option value="">선택하세요</option>
+          <option value="골프채">골프채</option>
+          <option value="골프백">골프백</option>
+          <option value="골프웨어">골프웨어</option>
+          <option value="골프화">골프화</option>
+          <option value="거리측정기">거리측정기</option>
+          <option value="기타">기타</option>
+        </select>
+
+        <label>브랜드</label>
+        <input type="text" name="brand">
+
+        <label>가격</label>
+        <input type="number" name="price" required>
+
+        <label>상품 상태</label>
+        <select name="condition">
+          <option value="새상품">새상품</option>
+          <option value="상">상</option>
+          <option value="중">중</option>
+          <option value="하">하</option>
+        </select>
+
+        <label>샤프트</label>
+        <input type="text" name="shaft">
+
+        <label>플렉스</label>
+        <input type="text" name="flex">
+
+        <label>거래 지역</label>
+        <input type="text" name="region">
+
+        <label>거래 방법</label>
+        <select name="trade_method">
+          <option value="직거래">직거래</option>
+          <option value="택배">택배</option>
+          <option value="직거래/택배">직거래/택배 모두 가능</option>
+        </select>
+
+        <label>상품 설명</label>
+        <textarea name="description"></textarea>
+
+        <label>상품 사진</label>
+        <input type="file" name="image" accept="image/*">
+
+        <button type="submit">상품 등록하기</button>
+
+      </form>
+
+      <a class="back" href="/">← 홈으로</a>
+
+    </div>
+  </div>
+
+</body>
+</html>
