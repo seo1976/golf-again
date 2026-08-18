@@ -229,6 +229,24 @@ def upgrade_vendor_system():
     conn.commit(); conn.close()
 upgrade_vendor_system()
 
+
+def upgrade_platform_v4():
+    conn=db()
+    statements=[
+    "CREATE TABLE IF NOT EXISTS vendor_applications(id INTEGER PRIMARY KEY AUTOINCREMENT,user_id INTEGER,name TEXT NOT NULL,business_no TEXT,contact_name TEXT,phone TEXT,email TEXT,description TEXT,status TEXT DEFAULT 'pending',created_at DATETIME DEFAULT CURRENT_TIMESTAMP)",
+    "CREATE TABLE IF NOT EXISTS vendor_accounts(id INTEGER PRIMARY KEY AUTOINCREMENT,vendor_id INTEGER NOT NULL,user_id INTEGER UNIQUE NOT NULL,status TEXT DEFAULT 'active',created_at DATETIME DEFAULT CURRENT_TIMESTAMP)",
+    "CREATE TABLE IF NOT EXISTS vendor_products(id INTEGER PRIMARY KEY AUTOINCREMENT,vendor_id INTEGER NOT NULL,title TEXT NOT NULL,category TEXT,price INTEGER NOT NULL,shipping_fee INTEGER DEFAULT 0,stock INTEGER DEFAULT 0,buy_url TEXT,image_url TEXT,status TEXT DEFAULT 'active',created_at DATETIME DEFAULT CURRENT_TIMESTAMP)",
+    "CREATE TABLE IF NOT EXISTS reviews(id INTEGER PRIMARY KEY AUTOINCREMENT,user_id INTEGER NOT NULL,product_id INTEGER NOT NULL,rating INTEGER NOT NULL,content TEXT NOT NULL,image_url TEXT,verified INTEGER DEFAULT 0,created_at DATETIME DEFAULT CURRENT_TIMESTAMP)",
+    "CREATE TABLE IF NOT EXISTS groupbuys(product_id INTEGER PRIMARY KEY,end_at DATETIME,stock INTEGER DEFAULT 0,sold INTEGER DEFAULT 0,status TEXT DEFAULT 'open')",
+    "CREATE TABLE IF NOT EXISTS notifications(id INTEGER PRIMARY KEY AUTOINCREMENT,user_id INTEGER NOT NULL,kind TEXT,title TEXT,message TEXT,link TEXT,is_read INTEGER DEFAULT 0,created_at DATETIME DEFAULT CURRENT_TIMESTAMP)",
+    "CREATE TABLE IF NOT EXISTS alert_subscriptions(id INTEGER PRIMARY KEY AUTOINCREMENT,user_id INTEGER NOT NULL,product_id INTEGER NOT NULL,alert_type TEXT,target_price INTEGER,is_active INTEGER DEFAULT 1,UNIQUE(user_id,product_id,alert_type))",
+    "CREATE TABLE IF NOT EXISTS price_history(id INTEGER PRIMARY KEY AUTOINCREMENT,compare_item_id INTEGER,offer_id INTEGER,vendor_id INTEGER,price INTEGER NOT NULL,shipping_fee INTEGER DEFAULT 0,recorded_at DATETIME DEFAULT CURRENT_TIMESTAMP)",
+    "CREATE TABLE IF NOT EXISTS search_logs(id INTEGER PRIMARY KEY AUTOINCREMENT,user_id INTEGER,query TEXT NOT NULL,created_at DATETIME DEFAULT CURRENT_TIMESTAMP)"
+    ]
+    for s in statements: conn.execute(s)
+    conn.commit(); conn.close()
+upgrade_platform_v4()
+
 @app.route('/')
 def home():
     conn=db()
@@ -503,6 +521,135 @@ def compare_smart():
     conn.close()
     body='''<div class="section-head"><h2>\uc2a4\ub9c8\ud2b8 \ucd5c\uc800\uac00</h2></div>{% for item,offers in result %}<div class="panel" style="margin-bottom:14px"><h3>{{item.title}}</h3>{% for o in offers %}<div style="padding:11px 0;border-bottom:1px solid #eee">{% if loop.first %}<span class="tag">\ucd5c\uc800\uac00</span>{% endif %} <b>{{o.vendor_name or o.seller}}</b><b style="float:right">{{"{:,}".format(o.total_price)}}\uc6d0</b><div class="muted">\uc0c1\ud488 {{"{:,}".format(o.price)}}\uc6d0 + \ubc30\uc1a1\ube44 {{"{:,}".format(o.shipping or 0)}}\uc6d0{% if o.checked_at %} / {{o.checked_at}} \uae30\uc900{% endif %}</div><a class="outline-btn" href="{{url_for('go_offer',offer_id=o.id)}}">\uad6c\ub9e4\ucc98\ub85c \uc774\ub3d9</a></div>{% else %}<p>\ube44\uad50\ud560 \ud310\ub9e4\ucc98\uac00 \uc5c6\uc2b5\ub2c8\ub2e4.</p>{% endfor %}</div>{% endfor %}'''
     return page('\uc2a4\ub9c8\ud2b8 \ucd5c\uc800\uac00',body,result=result)
+
+
+@app.route('/platform')
+def platform_hub():
+    return page('Platform V4','<div class="section-head"><h2>BOJJIMI PLATFORM V4</h2></div><div class="panel"><a class="btn pink" href="/vendor/apply">Vendor</a> <a class="btn" href="/search-v4">Search</a> <a class="btn" href="/groupbuy">Group Buy</a> <a class="btn" href="/price-history">Price History</a> <a class="btn" href="/notifications">Alerts</a></div>')
+
+@app.route('/vendor/apply',methods=['GET','POST'])
+@user_required
+def vendor_apply():
+    conn=db()
+    if request.method=='POST':
+        conn.execute("INSERT INTO vendor_applications(user_id,name,business_no,contact_name,phone,email,description) VALUES(?,?,?,?,?,?,?)",(session['user_id'],request.form.get('name',''),request.form.get('business_no',''),request.form.get('contact_name',''),request.form.get('phone',''),request.form.get('email',''),request.form.get('description','')))
+        conn.commit(); conn.close(); flash('Vendor application submitted.'); return redirect(url_for('vendor_apply'))
+    rows=conn.execute("SELECT * FROM vendor_applications WHERE user_id=? ORDER BY id DESC",(session['user_id'],)).fetchall(); conn.close()
+    body='<div class="form"><h2>Vendor Application</h2><form method="post"><div class="field"><label>Brand</label><input name="name" required></div><div class="field"><label>Business No.</label><input name="business_no"></div><div class="field"><label>Contact</label><input name="contact_name"></div><div class="field"><label>Phone</label><input name="phone"></div><div class="field"><label>Email</label><input name="email"></div><div class="field"><label>Intro</label><textarea name="description"></textarea></div><button class="btn pink">Apply</button></form></div><div class="panel" style="margin-top:12px">{% for r in rows %}<p><b>{{r.name}}</b> - {{r.status}}</p>{% endfor %}</div>'
+    return page('Vendor Apply',body,rows=rows)
+
+@app.route('/admin/vendor-applications',methods=['GET','POST'])
+@admin_required
+def admin_vendor_applications():
+    conn=db()
+    if request.method=='POST':
+        aid=int(request.form['application_id']); action=request.form.get('action'); a=conn.execute("SELECT * FROM vendor_applications WHERE id=?",(aid,)).fetchone()
+        if a and action=='approve':
+            cur=conn.execute("INSERT INTO vendors(name,subtext,logo_text,url,sort_order,active,affiliate_url,link_type) VALUES(?,?,?,?,0,1,'','external')",(a['name'],'Approved vendor',a['name'][:2],'#'))
+            conn.execute("INSERT OR REPLACE INTO vendor_accounts(vendor_id,user_id,status) VALUES(?,?,'active')",(cur.lastrowid,a['user_id']))
+            conn.execute("UPDATE vendor_applications SET status='approved' WHERE id=?",(aid,))
+        elif a: conn.execute("UPDATE vendor_applications SET status='rejected' WHERE id=?",(aid,))
+        conn.commit(); conn.close(); return redirect(url_for('admin_vendor_applications'))
+    rows=conn.execute("SELECT a.*,u.nickname FROM vendor_applications a JOIN users u ON u.id=a.user_id ORDER BY a.id DESC").fetchall(); conn.close()
+    body='<div class="section-head"><h2>Vendor Applications</h2></div><div class="panel">{% for r in rows %}<div style="padding:10px;border-bottom:1px solid #eee"><b>{{r.name}}</b> / {{r.nickname}} / {{r.status}}{% if r.status=="pending" %}<form method="post"><input type="hidden" name="application_id" value="{{r.id}}"><button class="btn pink" name="action" value="approve">Approve</button><button class="btn danger" name="action" value="reject">Reject</button></form>{% endif %}</div>{% endfor %}</div>'
+    return page('Vendor Applications',body,rows=rows)
+
+@app.route('/vendor/dashboard',methods=['GET','POST'])
+@user_required
+def vendor_dashboard():
+    conn=db(); va=conn.execute("SELECT va.*,v.name FROM vendor_accounts va JOIN vendors v ON v.id=va.vendor_id WHERE va.user_id=? AND va.status='active'",(session['user_id'],)).fetchone()
+    if not va: conn.close(); flash('No approved vendor account.'); return redirect(url_for('vendor_apply'))
+    if request.method=='POST':
+        conn.execute("INSERT INTO vendor_products(vendor_id,title,category,price,shipping_fee,stock,buy_url,image_url) VALUES(?,?,?,?,?,?,?,?)",(va['vendor_id'],request.form.get('title',''),request.form.get('category',''),int(request.form.get('price',0)),int(request.form.get('shipping_fee',0)),int(request.form.get('stock',0)),request.form.get('buy_url',''),request.form.get('image_url',''))); conn.commit()
+    items=conn.execute("SELECT * FROM vendor_products WHERE vendor_id=? ORDER BY id DESC",(va['vendor_id'],)).fetchall(); conn.close()
+    body='<div class="section-head"><h2>{{va.name}} Vendor Center</h2></div><div class="form"><form method="post"><div class="field"><label>Product</label><input name="title" required></div><div class="field"><label>Category</label><input name="category"></div><div class="row"><div class="field"><label>Price</label><input type="number" name="price" required></div><div class="field"><label>Shipping</label><input type="number" name="shipping_fee" value="0"></div></div><div class="field"><label>Stock</label><input type="number" name="stock" value="0"></div><div class="field"><label>Buy URL</label><input name="buy_url"></div><div class="field"><label>Image URL</label><input name="image_url"></div><button class="btn pink">Add Product</button></form></div><div class="panel" style="margin-top:12px">{% for x in items %}<p><b>{{x.title}}</b> / {{x.price|money}} / Stock {{x.stock}}</p>{% endfor %}</div>'
+    return page('Vendor Center',body,va=va,items=items)
+
+@app.post('/review/<int:product_id>')
+@user_required
+def review_add(product_id):
+    conn=db(); purchased=conn.execute("SELECT 1 FROM order_items oi JOIN orders o ON o.id=oi.order_id WHERE o.user_id=? AND oi.product_id=? LIMIT 1",(session['user_id'],product_id)).fetchone()
+    rating=max(1,min(5,int(request.form.get('rating',5))))
+    conn.execute("INSERT INTO reviews(user_id,product_id,rating,content,image_url,verified) VALUES(?,?,?,?,?,?)",(session['user_id'],product_id,rating,request.form.get('content',''),request.form.get('image_url',''),1 if purchased else 0)); conn.commit(); conn.close()
+    return redirect(url_for('reviews_page',product_id=product_id))
+
+@app.route('/reviews/<int:product_id>')
+def reviews_page(product_id):
+    conn=db(); p=conn.execute("SELECT * FROM products WHERE id=?",(product_id,)).fetchone(); rows=conn.execute("SELECT r.*,u.nickname FROM reviews r JOIN users u ON u.id=r.user_id WHERE r.product_id=? ORDER BY r.id DESC",(product_id,)).fetchall(); avg=conn.execute("SELECT ROUND(AVG(rating),1)a FROM reviews WHERE product_id=?",(product_id,)).fetchone()['a']; conn.close()
+    body='<div class="section-head"><h2>{{p.title}} Reviews</h2><b>{{avg or 0}} / 5</b></div>{% if session.get("user_id") %}<div class="form"><form method="post" action="/review/{{p.id}}"><div class="field"><select name="rating"><option>5</option><option>4</option><option>3</option><option>2</option><option>1</option></select></div><div class="field"><textarea name="content" required></textarea></div><div class="field"><input name="image_url" placeholder="Photo URL"></div><button class="btn pink">Review</button></form></div>{% endif %}<div class="panel" style="margin-top:12px">{% for r in rows %}<p><b>{{r.nickname}}</b> {{r.rating}}/5 {% if r.verified %}<span class="tag">Verified</span>{% endif %}<br>{{r.content}}</p>{% endfor %}</div>'
+    return page('Reviews',body,p=p,rows=rows,avg=avg)
+
+@app.route('/groupbuy')
+def groupbuy_page():
+    conn=db(); rows=conn.execute("SELECT p.*,g.end_at,g.stock,g.sold,g.status gb_status,CASE WHEN g.end_at IS NOT NULL AND datetime(g.end_at)<=datetime('now') THEN 1 ELSE 0 END expired FROM products p JOIN groupbuys g ON g.product_id=p.id ORDER BY g.end_at").fetchall(); conn.close()
+    body='<div class="section-head"><h2>Group Buy</h2></div><div class="product-grid">{% for x in rows %}<div class="card"><div class="card-body"><h3>{{x.title}}</h3><p>Ends {{x.end_at or "TBD"}}</p><p>Remaining {{[x.stock-x.sold,0]|max}}</p>{% if x.expired or x.gb_status!="open" %}<span class="tag">Closed</span>{% else %}<span class="tag">Open</span>{% endif %}</div></div>{% endfor %}</div>'
+    return page('Group Buy',body,rows=rows)
+
+@app.route('/admin/groupbuy',methods=['GET','POST'])
+@admin_required
+def admin_groupbuy():
+    conn=db()
+    if request.method=='POST':
+        conn.execute("INSERT OR REPLACE INTO groupbuys(product_id,end_at,stock,sold,status) VALUES(?,?,?,?,?)",(int(request.form['product_id']),request.form.get('end_at') or None,int(request.form.get('stock',0)),int(request.form.get('sold',0)),request.form.get('status','open'))); conn.commit()
+    products=conn.execute("SELECT id,title FROM products ORDER BY id DESC").fetchall(); conn.close()
+    body='<div class="form"><h2>Group Buy Admin</h2><form method="post"><div class="field"><select name="product_id">{% for p in products %}<option value="{{p.id}}">{{p.title}}</option>{% endfor %}</select></div><div class="field"><input type="datetime-local" name="end_at"></div><div class="row"><input type="number" name="stock" placeholder="Stock"><input type="number" name="sold" placeholder="Sold"></div><button class="btn pink">Save</button></form></div>'
+    return page('Group Buy Admin',body,products=products)
+
+@app.post('/alerts/subscribe/<int:product_id>')
+@user_required
+def alert_subscribe(product_id):
+    conn=db(); conn.execute("INSERT OR REPLACE INTO alert_subscriptions(user_id,product_id,alert_type,target_price,is_active) VALUES(?,?,?,?,1)",(session['user_id'],product_id,request.form.get('alert_type','price'),request.form.get('target_price') or None)); conn.commit(); conn.close(); flash('Alert saved.'); return redirect(request.referrer or url_for('shop'))
+
+@app.route('/notifications')
+@user_required
+def notifications_page():
+    conn=db(); rows=conn.execute("SELECT * FROM notifications WHERE user_id=? ORDER BY id DESC LIMIT 100",(session['user_id'],)).fetchall(); conn.execute("UPDATE notifications SET is_read=1 WHERE user_id=?",(session['user_id'],)); conn.commit(); conn.close()
+    body='<div class="section-head"><h2>Notifications</h2></div><div class="panel">{% for n in rows %}<p><b>{{n.title}}</b><br>{{n.message}}</p>{% else %}<p class="muted">No notifications.</p>{% endfor %}</div>'
+    return page('Notifications',body,rows=rows)
+
+@app.post('/admin/run-alerts')
+@admin_required
+def run_alerts():
+    conn=db(); subs=conn.execute("SELECT s.*,p.title,p.sale_price FROM alert_subscriptions s JOIN products p ON p.id=s.product_id WHERE s.is_active=1").fetchall()
+    for s in subs:
+        if s['alert_type']=='price' and s['target_price'] and s['sale_price'] and s['sale_price']<=s['target_price']:
+            conn.execute("INSERT INTO notifications(user_id,kind,title,message,link) VALUES(?,?,?,?,?)",(s['user_id'],'price','Price Alert',s['title']+' reached your target price.','/product/'+str(s['product_id']))); conn.execute("UPDATE alert_subscriptions SET is_active=0 WHERE id=?",(s['id'],))
+    conn.commit(); conn.close(); return redirect(url_for('admin_dashboard_v4'))
+
+@app.route('/price-history')
+def price_history_page():
+    conn=db(); rows=conn.execute("SELECT i.id,i.title,MIN(h.price+h.shipping_fee) low,MAX(h.price+h.shipping_fee) high,(SELECT ph.price+ph.shipping_fee FROM price_history ph WHERE ph.compare_item_id=i.id ORDER BY ph.id DESC LIMIT 1) current FROM compare_items i LEFT JOIN price_history h ON h.compare_item_id=i.id AND datetime(h.recorded_at)>=datetime('now','-30 day') GROUP BY i.id ORDER BY i.id DESC").fetchall(); conn.close()
+    body='<div class="section-head"><h2>30 Day Price History</h2></div><div class="table"><div class="tr head"><div>Product</div><div>Low</div><div>High</div><div>Current</div></div>{% for r in rows %}<div class="tr"><div>{{r.title}}</div><div>{{r.low|money}}</div><div>{{r.high|money}}</div><div>{{r.current|money}}</div></div>{% endfor %}</div>'
+    return page('Price History',body,rows=rows)
+
+@app.post('/admin/snapshot-prices')
+@admin_required
+def snapshot_prices():
+    conn=db(); offers=conn.execute("SELECT * FROM compare_offers WHERE COALESCE(active,1)=1").fetchall()
+    for o in offers: conn.execute("INSERT INTO price_history(compare_item_id,offer_id,vendor_id,price,shipping_fee) VALUES(?,?,?,?,?)",(o['item_id'],o['id'],o['vendor_id'],o['price'],o['shipping'] or 0))
+    conn.commit(); conn.close(); return redirect(url_for('admin_dashboard_v4'))
+
+@app.route('/search-v4')
+def search_v4():
+    q=request.args.get('q','').strip(); conn=db()
+    if q: conn.execute("INSERT INTO search_logs(user_id,query) VALUES(?,?)",(session.get('user_id'),q)); conn.commit()
+    like='%'+q+'%'; items=conn.execute("SELECT * FROM products WHERE (?='' OR title LIKE ? OR brand LIKE ? OR description LIKE ?) ORDER BY id DESC",(q,like,like,like)).fetchall()
+    popular=conn.execute("SELECT query,COUNT(*) c FROM search_logs GROUP BY query ORDER BY c DESC LIMIT 8").fetchall(); recent=conn.execute("SELECT query FROM search_logs WHERE user_id IS ? ORDER BY id DESC LIMIT 8",(session.get('user_id'),)).fetchall(); conn.close()
+    body='<div class="section-head"><h2>Smart Search</h2></div><form class="compare-search"><input name="q" value="{{q}}" placeholder="Product or brand"><button>Search</button></form><p>Popular: {% for x in popular %}<a class="tag" href="?q={{x.query}}">{{x.query}}</a> {% endfor %}</p><p>Recent: {% for x in recent %}<span class="tag">{{x.query}}</span> {% endfor %}</p><div class="product-grid">{% for p in items %}{{product_card(p)|safe}}{% endfor %}</div>'
+    return page('Search',body,q=q,items=items,popular=popular,recent=recent,product_card=product_card)
+
+@app.route('/api/search-suggest')
+def search_suggest():
+    q=request.args.get('q','').strip(); conn=db(); rows=conn.execute("SELECT title FROM products WHERE title LIKE ? ORDER BY featured DESC,id DESC LIMIT 8",('%'+q+'%',)).fetchall() if q else []; conn.close(); return {'suggestions':[r['title'] for r in rows]}
+
+@app.route('/admin/dashboard-v4')
+@admin_required
+def admin_dashboard_v4():
+    conn=db()
+    s={'users':conn.execute("SELECT COUNT(*)c FROM users").fetchone()['c'],'today_users':conn.execute("SELECT COUNT(*)c FROM users WHERE date(created_at)=date('now')").fetchone()['c'],'orders':conn.execute("SELECT COUNT(*)c FROM orders").fetchone()['c'],'today_orders':conn.execute("SELECT COUNT(*)c FROM orders WHERE date(created_at)=date('now')").fetchone()['c'],'sales':conn.execute("SELECT COALESCE(SUM(total),0)c FROM orders").fetchone()['c'],'pending':conn.execute("SELECT COUNT(*)c FROM vendor_applications WHERE status='pending'").fetchone()['c'],'reviews':conn.execute("SELECT COUNT(*)c FROM reviews").fetchone()['c'],'clicks':conn.execute("SELECT COUNT(*)c FROM vendor_clicks").fetchone()['c']}
+    top=conn.execute("SELECT p.title,COUNT(f.product_id)c FROM products p LEFT JOIN favorites f ON f.product_id=p.id GROUP BY p.id ORDER BY c DESC LIMIT 5").fetchall(); conn.close()
+    body='<div class="section-head"><h2>Admin Dashboard V4</h2></div><div class="summary"><div class="panel">Users<strong>{{s.users}}</strong><span class="muted">Today +{{s.today_users}}</span></div><div class="panel">Orders<strong>{{s.orders}}</strong><span class="muted">Today {{s.today_orders}}</span></div><div class="panel">Sales<strong>{{s.sales|money}}</strong></div></div><div class="summary" style="margin-top:12px"><div class="panel">Vendor Pending<strong>{{s.pending}}</strong></div><div class="panel">Reviews<strong>{{s.reviews}}</strong></div><div class="panel">Vendor Clicks<strong>{{s.clicks}}</strong></div></div><div class="panel" style="margin-top:12px"><a class="btn pink" href="/admin/vendor-applications">Vendor Approval</a> <a class="btn" href="/admin/groupbuy">Group Buy</a><form method="post" action="/admin/snapshot-prices" style="display:inline"><button class="btn">Price Snapshot</button></form><form method="post" action="/admin/run-alerts" style="display:inline"><button class="btn">Run Alerts</button></form></div>'
+    return page('Admin V4',body,s=s,top=top)
 
 if __name__=='__main__':
     app.run(host='0.0.0.0',port=int(os.environ.get('PORT','5000')),debug=False)
