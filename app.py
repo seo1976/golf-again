@@ -304,6 +304,14 @@ def product_card(p):
     return f'''<div class="card"><a href="{url_for('product_detail',product_id=p['id'])}"><div class="card-img">{badge}{img}</div><div class="card-body"><span class="tag">{p['brand'] or p['product_type']}</span><div class="card-title">{p['title']}</div><div class="sale">{sale}</div>{original}</div></a><div class="card-body" style="padding-top:0">{actions}</div></div>'''
 
 
+
+@app.after_request
+def force_utf8_response(response):
+    """Always declare UTF-8 for browser text responses."""
+    if response.mimetype in ("text/html", "text/plain", "application/json"):
+        response.headers["Content-Type"] = f"{response.mimetype}; charset=utf-8"
+    return response
+
 @app.route("/")
 def home():
     conn=db()
