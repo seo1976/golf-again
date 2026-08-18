@@ -217,6 +217,18 @@ def force_utf8_response(response):
         response.headers['Content-Type'] = f"{response.mimetype}; charset=utf-8"
     return response
 
+def upgrade_vendor_system():
+    conn=db()
+    vcols={r["name"] for r in conn.execute("PRAGMA table_info(vendors)").fetchall()}
+    for col,ddl in {"affiliate_url":"TEXT DEFAULT ''","link_type":"TEXT DEFAULT 'external'","click_count":"INTEGER DEFAULT 0","updated_at":"DATETIME"}.items():
+        if col not in vcols: conn.execute(f"ALTER TABLE vendors ADD COLUMN {col} {ddl}")
+    ocols={r["name"] for r in conn.execute("PRAGMA table_info(compare_offers)").fetchall()}
+    for col,ddl in {"vendor_id":"INTEGER","active":"INTEGER DEFAULT 1","checked_at":"DATETIME"}.items():
+        if col not in ocols: conn.execute(f"ALTER TABLE compare_offers ADD COLUMN {col} {ddl}")
+    conn.execute("CREATE TABLE IF NOT EXISTS vendor_clicks(id INTEGER PRIMARY KEY AUTOINCREMENT,vendor_id INTEGER NOT NULL,compare_item_id INTEGER,compare_offer_id INTEGER,user_id INTEGER,clicked_at DATETIME DEFAULT CURRENT_TIMESTAMP)")
+    conn.commit(); conn.close()
+upgrade_vendor_system()
+
 @app.route('/')
 def home():
     conn=db()
@@ -445,6 +457,52 @@ def admin_users():
     conn=db(); rows=conn.execute('SELECT u.*,(SELECT COUNT(*) FROM orders o WHERE o.user_id=u.id) order_count FROM users u ORDER BY u.id DESC').fetchall(); conn.close()
     return page('\ud68c\uc6d0\uad00\ub9ac','<div class="section-head"><h2>\ud68c\uc6d0\uad00\ub9ac</h2></div><div class="table"><div class="tr head"><div>\ud68c\uc6d0</div><div>\uc774\uba54\uc77c</div><div>\ud734\ub300\ud3f0</div><div>\uc8fc\ubb38</div></div>{% for u in rows %}<div class="tr"><div><b>{{u[\'nickname\']}}</b></div><div>{{u[\'email\']}}</div><div>{{u[\'phone\'] or \'-\'}}</div><div>{{u[\'order_count\']}}\uac74</div></div>{% endfor %}</div>',rows=rows)
 
+
+@app.route('/go/vendor/<int:vendor_id>')
+def go_vendor(vendor_id):
+    conn=db(); v=conn.execute("SELECT * FROM vendors WHERE id=? AND COALESCE(active,1)=1",(vendor_id,)).fetchone()
+    if not v: conn.close(); return "Vendor not found",404
+    target=(v["affiliate_url"] or v["url"] or "").strip()
+    if not target or target=="#": conn.close(); flash('\uc544\uc9c1 \uc5f0\uacb0 \uc8fc\uc18c\uac00 \ub4f1\ub85d\ub418\uc9c0 \uc54a\uc558\uc2b5\ub2c8\ub2e4.'); return redirect(url_for('home'))
+    conn.execute("UPDATE vendors SET click_count=COALESCE(click_count,0)+1,updated_at=CURRENT_TIMESTAMP WHERE id=?",(vendor_id,)); conn.execute("INSERT INTO vendor_clicks(vendor_id,user_id) VALUES(?,?)",(vendor_id,session.get("user_id"))); conn.commit(); conn.close(); return redirect(target)
+
+@app.route('/go/offer/<int:offer_id>')
+def go_offer(offer_id):
+    conn=db(); o=conn.execute("SELECT o.*,v.url vendor_url,v.affiliate_url FROM compare_offers o LEFT JOIN vendors v ON v.id=o.vendor_id WHERE o.id=? AND COALESCE(o.active,1)=1",(offer_id,)).fetchone()
+    if not o: conn.close(); return "Offer not found",404
+    target=(o["buy_url"] or o["affiliate_url"] or o["vendor_url"] or "").strip()
+    if not target or target=="#": conn.close(); flash('\uc544\uc9c1 \uad6c\ub9e4 \ub9c1\ud06c\uac00 \ub4f1\ub85d\ub418\uc9c0 \uc54a\uc558\uc2b5\ub2c8\ub2e4.'); return redirect(url_for('compare'))
+    if o["vendor_id"]: conn.execute("UPDATE vendors SET click_count=COALESCE(click_count,0)+1 WHERE id=?",(o["vendor_id"],))
+    conn.execute("INSERT INTO vendor_clicks(vendor_id,compare_item_id,compare_offer_id,user_id) VALUES(?,?,?,?)",(o["vendor_id"],o["item_id"],offer_id,session.get("user_id"))); conn.commit(); conn.close(); return redirect(target)
+
+@app.route('/admin/vendors',methods=['GET','POST'])
+@admin_required
+def admin_vendors():
+    conn=db()
+    if request.method=='POST':
+        action=request.form.get('action','add'); vid=request.form.get('vendor_id')
+        if action=='toggle' and vid: conn.execute("UPDATE vendors SET active=CASE WHEN COALESCE(active,1)=1 THEN 0 ELSE 1 END,updated_at=CURRENT_TIMESTAMP WHERE id=?",(vid,))
+        else: conn.execute("INSERT INTO vendors(name,subtext,logo_text,url,affiliate_url,link_type,sort_order,active,updated_at) VALUES(?,?,?,?,?,?,0,1,CURRENT_TIMESTAMP)",(request.form.get('name','').strip(),request.form.get('subtext','').strip(),request.form.get('logo_text','').strip(),request.form.get('url','').strip(),request.form.get('affiliate_url','').strip(),request.form.get('link_type','external')))
+        conn.commit(); conn.close(); return redirect(url_for('admin_vendors'))
+    rows=conn.execute("SELECT v.*,(SELECT COUNT(*) FROM vendor_clicks c WHERE c.vendor_id=v.id) tracked_clicks FROM vendors v ORDER BY sort_order,id").fetchall(); conn.close()
+    body='''<div class="section-head"><h2>\ubca4\ub354 \uad00\ub9ac</h2></div><div class="form"><h3>\uc0c8 \ubca4\ub354 \ucd94\uac00</h3><form method="post"><div class="row"><div class="field"><label>\ubca4\ub354\uba85</label><input name="name" required></div><div class="field"><label>\ub85c\uace0 \ud14d\uc2a4\ud2b8</label><input name="logo_text"></div></div><div class="field"><label>\uc124\uba85</label><input name="subtext"></div><div class="field"><label>\uae30\ubcf8 \uc5f0\uacb0\uc8fc\uc18c</label><input name="url" placeholder="https://"></div><div class="field"><label>\uc81c\ud734 \ub9c1\ud06c</label><input name="affiliate_url" placeholder="https://"></div><div class="field"><label>\uc720\ud615</label><select name="link_type"><option value="external">\uc678\ubd80 \ubca4\ub354</option><option value="affiliate">\uc81c\ud734 \ubca4\ub354</option><option value="direct">\ubcf4\ucc0c\ubbf8 \uc9c1\uc811\ud310\ub9e4</option></select></div><button class="btn pink">\ubca4\ub354 \ucd94\uac00</button></form></div><div class="panel" style="margin-top:15px"><h3>\ub4f1\ub85d \ubca4\ub354</h3>{% for v in rows %}<div style="padding:12px 0;border-bottom:1px solid #eee"><b>{{v.name}}</b> <span class="muted">{{v.link_type}} / \ud074\ub9ad {{v.tracked_clicks}}\ud68c / {% if v.active %}\ud65c\uc131{% else %}\ube44\ud65c\uc131{% endif %}</span><form method="post" style="display:inline;margin-left:8px"><input type="hidden" name="vendor_id" value="{{v.id}}"><input type="hidden" name="action" value="toggle"><button class="btn" type="submit">\ud65c\uc131/\ube44\ud65c\uc131</button></form></div>{% endfor %}</div>'''
+    return page('\ubca4\ub354 \uad00\ub9ac',body,rows=rows)
+
+@app.route('/admin/vendor-stats')
+@admin_required
+def admin_vendor_stats():
+    conn=db(); rows=conn.execute("SELECT v.*,COUNT(c.id) clicks FROM vendors v LEFT JOIN vendor_clicks c ON c.vendor_id=v.id GROUP BY v.id ORDER BY clicks DESC,v.id").fetchall(); conn.close()
+    body='''<div class="section-head"><h2>\ubca4\ub354 \ud074\ub9ad \ud1b5\uacc4</h2></div><div class="panel">{% for r in rows %}<div style="display:flex;justify-content:space-between;padding:12px 0;border-bottom:1px solid #eee"><span><b>{{r.name}}</b> <span class="muted">{{r.link_type}}</span></span><b>{{r.clicks}}\ud68c</b></div>{% else %}<p>\ud1b5\uacc4\uac00 \uc5c6\uc2b5\ub2c8\ub2e4.</p>{% endfor %}</div>'''
+    return page('\ubca4\ub354 \ud1b5\uacc4',body,rows=rows)
+
+@app.route('/compare-smart')
+def compare_smart():
+    conn=db(); items=conn.execute("SELECT * FROM compare_items ORDER BY id DESC").fetchall(); result=[]
+    for item in items:
+        offers=conn.execute("SELECT o.*,v.name vendor_name,(o.price+COALESCE(o.shipping,0)) total_price FROM compare_offers o LEFT JOIN vendors v ON v.id=o.vendor_id WHERE o.item_id=? AND COALESCE(o.active,1)=1 ORDER BY total_price,id",(item["id"],)).fetchall(); result.append((item,offers))
+    conn.close()
+    body='''<div class="section-head"><h2>\uc2a4\ub9c8\ud2b8 \ucd5c\uc800\uac00</h2></div>{% for item,offers in result %}<div class="panel" style="margin-bottom:14px"><h3>{{item.title}}</h3>{% for o in offers %}<div style="padding:11px 0;border-bottom:1px solid #eee">{% if loop.first %}<span class="tag">\ucd5c\uc800\uac00</span>{% endif %} <b>{{o.vendor_name or o.seller}}</b><b style="float:right">{{"{:,}".format(o.total_price)}}\uc6d0</b><div class="muted">\uc0c1\ud488 {{"{:,}".format(o.price)}}\uc6d0 + \ubc30\uc1a1\ube44 {{"{:,}".format(o.shipping or 0)}}\uc6d0{% if o.checked_at %} / {{o.checked_at}} \uae30\uc900{% endif %}</div><a class="outline-btn" href="{{url_for('go_offer',offer_id=o.id)}}">\uad6c\ub9e4\ucc98\ub85c \uc774\ub3d9</a></div>{% else %}<p>\ube44\uad50\ud560 \ud310\ub9e4\ucc98\uac00 \uc5c6\uc2b5\ub2c8\ub2e4.</p>{% endfor %}</div>{% endfor %}'''
+    return page('\uc2a4\ub9c8\ud2b8 \ucd5c\uc800\uac00',body,result=result)
 
 if __name__=='__main__':
     app.run(host='0.0.0.0',port=int(os.environ.get('PORT','5000')),debug=False)
