@@ -1,160 +1,403 @@
-from flask import Flask, request, redirect, url_for, session, flash, render_template_string
-import sqlite3, os, hashlib
-from functools import wraps
+import os
+import secrets
+import sqlite3
 from datetime import datetime
+from functools import wraps
+
+from flask import Flask, abort, flash, redirect, render_template_string, request, session, url_for
+from werkzeug.security import check_password_hash, generate_password_hash
 
 app = Flask(__name__)
-app.secret_key = os.environ.get('SECRET_KEY', 'ai-hr-lab-dev-change-me')
-DB = os.path.join(os.path.dirname(__file__), 'ai_hr_lab.db')
+app.secret_key = os.environ.get("SECRET_KEY", "bojjimi-dev-change-this-key")
+DB_PATH = os.environ.get("DATABASE_PATH", os.path.join(os.path.dirname(__file__), "bojjimi.db"))
+ADMIN_EMAIL = os.environ.get("ADMIN_EMAIL", "").strip().lower()
 
-SERVICES = {
-    'start': {'name':'START','price':290000,'desc':'소규모 채용을 위한 핵심 면접 설계','items':['직무 핵심요건 정리','핵심역량 4개','구조화 질문 10개','기본 평가표']},
-    'pro': {'name':'PRO','price':590000,'desc':'AI HR LAB의 표준 구조화 면접 시스템','items':['직무분석','핵심역량 모델','구조화 질문 20개','Evidence Check™ 추가질문','행동평가기준','면접관 기록지','지원자 평가표','종합의견서']},
-    'custom': {'name':'CUSTOM','price':990000,'desc':'중요직무·관리직용 맞춤 채용 프로젝트','items':['PRO 전체','맞춤 채용공고','서류평가기준','면접 진행 프로토콜','면접관 Quick Guide','공정채용 체크리스트','1회 수정']},
-    'partner': {'name':'HR PARTNER','price':290000,'desc':'반복채용 기업을 위한 월 구독형 파트너십','items':['월 1개 직무 면접세트','기존 자료 업데이트','질문·평가기준 보완','기업별 프로젝트 보관']}
-}
+CATEGORIES = ["두피·헤어", "페이스", "바디", "천연오일", "세트"]
+ORDER_STATUSES = ["주문접수", "입금확인", "상품준비", "배송중", "배송완료", "취소"]
+
 
 def db():
-    con = sqlite3.connect(DB)
+    con = sqlite3.connect(DB_PATH)
     con.row_factory = sqlite3.Row
+    con.execute("PRAGMA foreign_keys = ON")
     return con
 
-def pw_hash(p):
-    return hashlib.sha256(('AIHRLAB::'+p).encode()).hexdigest()
+
+def now():
+    return datetime.now().isoformat(timespec="minutes")
+
 
 def init_db():
-    con=db(); cur=con.cursor()
-    cur.executescript('''
+    con = db()
+    con.executescript("""
     CREATE TABLE IF NOT EXISTS users(
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      email TEXT UNIQUE NOT NULL, password TEXT NOT NULL,
-      company TEXT NOT NULL, contact_name TEXT NOT NULL,
-      phone TEXT, created_at TEXT NOT NULL
+      id INTEGER PRIMARY KEY AUTOINCREMENT, email TEXT UNIQUE NOT NULL,
+      password_hash TEXT NOT NULL, name TEXT NOT NULL, phone TEXT NOT NULL DEFAULT '',
+      role TEXT NOT NULL DEFAULT 'customer', created_at TEXT NOT NULL
     );
-    CREATE TABLE IF NOT EXISTS diagnoses(
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      company TEXT, industry TEXT, role TEXT, headcount TEXT,
-      hiring_issue TEXT, email TEXT, created_at TEXT NOT NULL
+    CREATE TABLE IF NOT EXISTS products(
+      id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, category TEXT NOT NULL,
+      short_desc TEXT NOT NULL DEFAULT '', description TEXT NOT NULL DEFAULT '',
+      ingredients TEXT NOT NULL DEFAULT '', usage TEXT NOT NULL DEFAULT '',
+      caution TEXT NOT NULL DEFAULT '', price INTEGER NOT NULL DEFAULT 0,
+      sale_price INTEGER, stock INTEGER NOT NULL DEFAULT 0, image_url TEXT NOT NULL DEFAULT '',
+      badge TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'draft',
+      featured INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
     );
-    CREATE TABLE IF NOT EXISTS projects(
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      user_id INTEGER NOT NULL, service_key TEXT NOT NULL,
-      role TEXT NOT NULL, headcount TEXT, experience TEXT,
-      duties TEXT, competencies TEXT, concern TEXT,
-      status TEXT NOT NULL DEFAULT '접수완료',
-      created_at TEXT NOT NULL,
+    CREATE TABLE IF NOT EXISTS orders(
+      id INTEGER PRIMARY KEY AUTOINCREMENT, order_no TEXT UNIQUE NOT NULL, user_id INTEGER,
+      buyer_name TEXT NOT NULL, email TEXT NOT NULL, phone TEXT NOT NULL,
+      postcode TEXT NOT NULL DEFAULT '', address1 TEXT NOT NULL, address2 TEXT NOT NULL DEFAULT '',
+      memo TEXT NOT NULL DEFAULT '', payment_method TEXT NOT NULL DEFAULT 'bank',
+      subtotal INTEGER NOT NULL, shipping_fee INTEGER NOT NULL, total INTEGER NOT NULL,
+      status TEXT NOT NULL DEFAULT '주문접수', created_at TEXT NOT NULL,
       FOREIGN KEY(user_id) REFERENCES users(id)
     );
-    ''')
-    con.commit(); con.close()
+    CREATE TABLE IF NOT EXISTS order_items(
+      id INTEGER PRIMARY KEY AUTOINCREMENT, order_id INTEGER NOT NULL, product_id INTEGER NOT NULL,
+      product_name TEXT NOT NULL, unit_price INTEGER NOT NULL, quantity INTEGER NOT NULL,
+      FOREIGN KEY(order_id) REFERENCES orders(id) ON DELETE CASCADE,
+      FOREIGN KEY(product_id) REFERENCES products(id)
+    );
+    """)
+    if con.execute("SELECT COUNT(*) FROM products").fetchone()[0] == 0:
+        con.execute("""INSERT INTO products(
+          name,category,short_desc,description,ingredients,usage,caution,price,sale_price,
+          stock,image_url,badge,status,featured,created_at,updated_at
+        ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", (
+          "RUBIE 보태니컬 두피 샴푸", "두피·헤어",
+          "풍성한 거품과 부드러운 마무리를 연구 중인 루비에 첫 제품",
+          "루비에의 첫 번째 두피·헤어 제품입니다. 현재 정식 판매 전 처방과 표시사항을 검토하고 있습니다.",
+          "정식 처방 확정 후 공개 예정",
+          "미온수로 두피와 모발을 적신 뒤 적당량을 거품 내어 마사지하고 깨끗하게 헹굽니다.",
+          "사용 중 또는 사용 후 이상 증상이 있으면 사용을 중지하고 전문가와 상담하세요.",
+          0, None, 0, "", "COMING SOON", "coming", 1, now(), now()
+        ))
+    con.commit()
+    con.close()
+
+
 init_db()
 
-def user_required(fn):
-    @wraps(fn)
-    def wrapper(*a,**k):
-        if not session.get('user_id'):
-            flash('기업회원 로그인이 필요합니다.')
-            return redirect(url_for('login', next=request.path))
-        return fn(*a,**k)
-    return wrapper
+
+def won(value):
+    return f"{int(value or 0):,}원"
+
+
+app.jinja_env.filters["won"] = won
+
 
 def current_user():
-    if not session.get('user_id'): return None
-    con=db(); u=con.execute('SELECT * FROM users WHERE id=?',(session['user_id'],)).fetchone(); con.close(); return u
+    if not session.get("user_id"):
+        return None
+    con = db()
+    user = con.execute("SELECT * FROM users WHERE id=?", (session["user_id"],)).fetchone()
+    con.close()
+    return user
 
-def money(v): return f'{int(v):,}원'
-app.jinja_env.filters['money']=money
 
-BASE='''
+def login_required(fn):
+    @wraps(fn)
+    def wrapped(*args, **kwargs):
+        if not session.get("user_id"):
+            flash("로그인이 필요합니다.")
+            return redirect(url_for("login", next=request.path))
+        return fn(*args, **kwargs)
+    return wrapped
+
+
+def admin_required(fn):
+    @wraps(fn)
+    def wrapped(*args, **kwargs):
+        user = current_user()
+        if not user or user["role"] != "admin":
+            abort(403)
+        return fn(*args, **kwargs)
+    return wrapped
+
+
+def cart_data():
+    raw = session.get("cart", {})
+    cart = {str(k): max(1, int(v)) for k, v in raw.items() if str(k).isdigit()}
+    if not cart:
+        return [], 0, 0, 0
+    ids = [int(i) for i in cart]
+    con = db()
+    products = con.execute(
+        f"SELECT * FROM products WHERE id IN ({','.join('?' for _ in ids)}) AND status='active'", ids
+    ).fetchall()
+    con.close()
+    items, subtotal = [], 0
+    for product in products:
+        quantity = min(cart[str(product["id"])], max(0, product["stock"]))
+        if quantity < 1:
+            continue
+        unit_price = product["sale_price"] if product["sale_price"] is not None else product["price"]
+        line_total = unit_price * quantity
+        subtotal += line_total
+        items.append({"product": product, "quantity": quantity, "unit_price": unit_price, "line_total": line_total})
+    shipping = 0 if subtotal == 0 or subtotal >= 50000 else 3000
+    return items, subtotal, shipping, subtotal + shipping
+
+
+BASE = """
 <!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>{{title}} | AI HR LAB</title>
+<meta name="description" content="RUBIE 자연유래 화장품을 만나는 보찌미 공식몰"><title>{{title}} | BOJJIMI</title>
 <style>
-*{box-sizing:border-box} :root{--navy:#101b33;--blue:#315eea;--sky:#eef3ff;--line:#e5e9f2;--ink:#172033;--muted:#697386;--bg:#f7f9fc;--green:#14a47b}
-body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','Noto Sans KR',Arial,sans-serif;line-height:1.55}
-a{text-decoration:none;color:inherit}.top{background:#fff;border-bottom:1px solid var(--line);position:sticky;top:0;z-index:20}.topin{max-width:1180px;margin:auto;height:76px;display:flex;align-items:center;gap:28px;padding:0 22px}.logo{font-size:24px;font-weight:900;letter-spacing:-1px;color:var(--navy)}.logo span{color:var(--blue)}.tag{font-size:12px;color:var(--muted)}nav{margin-left:auto;display:flex;gap:24px;align-items:center;font-size:14px;font-weight:700}.btn{display:inline-block;background:var(--blue);color:#fff;padding:12px 18px;border-radius:10px;border:0;font-weight:800;cursor:pointer}.btn.ghost{background:#fff;color:var(--blue);border:1px solid #c9d5ff}.btn.dark{background:var(--navy)}.page{max-width:1180px;margin:auto;padding:38px 22px 80px}.hero{display:grid;grid-template-columns:1.15fr .85fr;gap:34px;align-items:center;padding:42px 0 54px}.eyebrow{color:var(--blue);font-weight:900;font-size:14px}.hero h1{font-size:48px;line-height:1.14;letter-spacing:-2px;margin:10px 0 18px}.hero p{font-size:19px;color:var(--muted);max-width:720px}.hero-card{background:linear-gradient(150deg,#162341,#315eea);color:#fff;border-radius:26px;padding:30px;box-shadow:0 20px 55px #1c3d8a2b}.hero-card h3{font-size:23px;margin-top:0}.flow{display:grid;gap:10px}.flow div{background:#ffffff14;border:1px solid #ffffff22;padding:12px 14px;border-radius:12px}.section{padding:34px 0}.section h2{font-size:32px;letter-spacing:-1px;margin:0 0 10px}.lead{color:var(--muted);margin:0 0 24px}.grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:18px}.grid4{display:grid;grid-template-columns:repeat(4,1fr);gap:16px}.card{background:#fff;border:1px solid var(--line);border-radius:18px;padding:22px;box-shadow:0 8px 22px #2f4b7a0a}.card h3{margin:0 0 8px}.price{font-size:28px;font-weight:900;margin:14px 0}.muted{color:var(--muted)}.badge{display:inline-block;padding:5px 9px;border-radius:999px;background:var(--sky);color:var(--blue);font-size:12px;font-weight:900}.badge.green{background:#e9faf5;color:var(--green)}ul.clean{padding-left:18px;color:#3e4a60}.feature{font-size:14px}.feature b{display:block;font-size:16px;margin-bottom:5px}.steps{counter-reset:s}.step{position:relative;padding-left:52px}.step:before{counter-increment:s;content:counter(s);position:absolute;left:0;top:0;width:34px;height:34px;border-radius:50%;display:grid;place-items:center;background:var(--navy);color:#fff;font-weight:900}.formbox{max-width:760px;margin:auto;background:#fff;border:1px solid var(--line);border-radius:20px;padding:28px}.row{display:grid;grid-template-columns:1fr 1fr;gap:14px}.field{margin-bottom:15px}.field label{display:block;font-size:13px;font-weight:800;margin-bottom:6px}.field input,.field textarea,.field select{width:100%;padding:12px 13px;border:1px solid #dbe1eb;border-radius:10px;background:#fff;font:inherit}.field textarea{min-height:110px}.flash{max-width:1180px;margin:12px auto 0;padding:12px 22px;background:#fff7d9;border:1px solid #f4de8b;border-radius:10px}.kpi{font-size:30px;font-weight:900}.project{display:grid;grid-template-columns:1fr auto;gap:12px;align-items:center}.status{padding:6px 10px;border-radius:999px;background:#edf7f4;color:#118363;font-size:12px;font-weight:900}.evidence{background:#0f1b33;color:#fff;border-radius:20px;padding:28px}.evidence .cols{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}.evidence .cols div{background:#ffffff10;padding:16px;border-radius:12px}.footer{background:#0d172d;color:#c5ccda;padding:40px 22px}.footerin{max-width:1180px;margin:auto;display:flex;justify-content:space-between;gap:30px}.footer b{color:#fff}.small{font-size:12px}.center{text-align:center}.notice{background:#fff;border-left:4px solid var(--blue);padding:14px 16px;border-radius:8px;color:#4c5870}
-@media(max-width:820px){.hero{grid-template-columns:1fr}.hero h1{font-size:38px}.grid4,.grid3{grid-template-columns:1fr}.row{grid-template-columns:1fr}nav a.hide-m{display:none}.tag{display:none}.topin{gap:12px}.page{padding-top:24px}.evidence .cols{grid-template-columns:1fr}.footerin{display:block}}
+*{box-sizing:border-box}:root{--rose:#a44b64;--deep:#4d2934;--blush:#f8edf0;--cream:#fffaf6;--line:#eadde0;--ink:#30272a;--muted:#74686c;--white:#fff}
+html{scroll-behavior:smooth}body{margin:0;background:var(--cream);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans KR",Arial,sans-serif;line-height:1.58}a{text-decoration:none;color:inherit}button,input,select,textarea{font:inherit}
+.announcement{background:var(--deep);color:#fff;text-align:center;padding:8px 16px;font-size:12px}.top{position:sticky;top:0;z-index:30;background:#fffdfacc;border-bottom:1px solid var(--line);backdrop-filter:blur(14px)}.topin{max-width:1180px;height:74px;margin:auto;padding:0 22px;display:flex;align-items:center;gap:24px}.logo{font-family:Georgia,serif;font-weight:700;font-size:26px;letter-spacing:3px;color:var(--deep)}.logo small{display:block;font:600 9px Arial,sans-serif;letter-spacing:2.4px;color:var(--rose);text-align:center}.nav{margin-left:auto;display:flex;align-items:center;gap:22px;font-size:14px;font-weight:700}.cart-count{background:var(--rose);color:#fff;border-radius:99px;padding:1px 6px;font-size:11px}
+.page{max-width:1180px;margin:auto;padding:34px 22px 84px}.flash{max-width:1180px;margin:12px auto 0;padding:12px 18px;background:#fff;border:1px solid #e5c7cf;border-radius:12px;color:var(--deep)}
+.hero{min-height:560px;border-radius:32px;padding:64px;display:grid;grid-template-columns:1.08fr .92fr;align-items:center;gap:42px;background:radial-gradient(circle at 80% 20%,#f5dce3 0 14%,transparent 15%),linear-gradient(135deg,#fff 0%,#f9e8ed 58%,#ead4ca 100%);overflow:hidden}.eyebrow{font-size:12px;font-weight:900;letter-spacing:2px;color:var(--rose)}h1,h2,h3{line-height:1.2;letter-spacing:-.5px}.hero h1{font-family:Georgia,"Noto Serif KR",serif;font-size:58px;margin:13px 0 20px;color:var(--deep)}.hero p{font-size:18px;color:var(--muted);max-width:580px}.hero-art{aspect-ratio:1;border-radius:50% 50% 42% 58%;background:linear-gradient(145deg,#a44b64,#d8a9b6);display:grid;place-items:center;box-shadow:0 32px 70px #6e34464a;color:#fff;text-align:center}.hero-art b{font-family:Georgia,serif;font-size:52px;letter-spacing:6px}.hero-art span{display:block;font-size:12px;letter-spacing:3px;margin-top:8px}
+.btn{display:inline-flex;align-items:center;justify-content:center;border:0;border-radius:999px;padding:13px 21px;background:var(--rose);color:#fff;font-weight:800;cursor:pointer}.btn.ghost{background:#fff;color:var(--deep);border:1px solid var(--line)}.btn.dark{background:var(--deep)}.btn.small{padding:9px 14px;font-size:13px}.actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:25px}
+.section{padding:58px 0}.section-head{display:flex;align-items:end;justify-content:space-between;gap:20px;margin-bottom:24px}.section h2{font-family:Georgia,"Noto Serif KR",serif;font-size:36px;margin:6px 0}.lead{color:var(--muted);margin:0}.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:20px}.card{background:#fff;border:1px solid var(--line);border-radius:22px;overflow:hidden}.product-visual{aspect-ratio:1;background:linear-gradient(145deg,#f8e9ed,#e9d7ce);display:grid;place-items:center;position:relative}.product-visual img{width:100%;height:100%;object-fit:cover}.bottle{width:34%;height:62%;border-radius:28px 28px 16px 16px;background:linear-gradient(120deg,#653e49,#a45a6d);box-shadow:0 18px 34px #6d3a4933;display:grid;place-items:center;color:#fff;font-family:Georgia,serif;letter-spacing:3px}.badge{position:absolute;top:15px;left:15px;padding:6px 10px;border-radius:999px;background:#fff;color:var(--rose);font-size:11px;font-weight:900}.card-body{padding:20px}.category{font-size:12px;color:var(--rose);font-weight:800}.card h3{margin:7px 0;font-size:20px}.price{font-size:20px;font-weight:900;margin-top:14px}.old-price{text-decoration:line-through;color:#aaa;font-size:13px;margin-left:5px}.muted{color:var(--muted)}
+.values{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}.value{background:#fff;border:1px solid var(--line);border-radius:20px;padding:25px}.value .num{color:var(--rose);font:700 30px Georgia,serif}.value h3{margin:8px 0}.story{background:var(--deep);color:#fff;border-radius:28px;padding:46px;display:grid;grid-template-columns:1fr 1fr;gap:38px}.story p{color:#e9dfe2}.story-note{border:1px solid #ffffff2e;background:#ffffff0d;border-radius:20px;padding:22px}
+.shopbar{display:flex;justify-content:space-between;align-items:center;gap:14px;flex-wrap:wrap;margin-bottom:22px}.filters{display:flex;gap:8px;flex-wrap:wrap}.pill{padding:9px 14px;border-radius:999px;border:1px solid var(--line);background:#fff;font-size:13px}.pill.active{background:var(--deep);color:#fff;border-color:var(--deep)}
+.detail{display:grid;grid-template-columns:1fr 1fr;gap:48px}.detail .product-visual{border-radius:28px}.detail h1{font-family:Georgia,"Noto Serif KR",serif;font-size:42px}.detail-price{font-size:28px;font-weight:900}.info-table{border-top:1px solid var(--line);margin-top:24px}.info-row{display:grid;grid-template-columns:130px 1fr;padding:15px 0;border-bottom:1px solid var(--line);gap:12px}.qty{width:82px;padding:10px;border:1px solid var(--line);border-radius:10px}
+.formbox{max-width:760px;margin:auto;background:#fff;border:1px solid var(--line);border-radius:24px;padding:30px}.field{margin-bottom:16px}.field label{display:block;font-weight:800;font-size:13px;margin-bottom:7px}.field input,.field select,.field textarea{width:100%;padding:13px;border:1px solid #dbcdd1;border-radius:11px;background:#fff}.field textarea{min-height:110px;resize:vertical}.row{display:grid;grid-template-columns:1fr 1fr;gap:14px}.notice{background:var(--blush);border-left:4px solid var(--rose);padding:14px 16px;border-radius:10px;color:var(--deep)}
+.cart-row{display:grid;grid-template-columns:86px 1fr 100px 120px auto;gap:16px;align-items:center;background:#fff;border-bottom:1px solid var(--line);padding:18px}.thumb{width:86px;height:86px;border-radius:15px;background:linear-gradient(145deg,#f8e9ed,#e9d7ce);display:grid;place-items:center;color:var(--rose);font:700 12px Georgia,serif}.summary{margin-left:auto;max-width:420px;background:#fff;border:1px solid var(--line);border-radius:20px;padding:22px}.summary-line{display:flex;justify-content:space-between;padding:8px 0}.summary-line.total{border-top:1px solid var(--line);margin-top:8px;padding-top:15px;font-size:20px;font-weight:900}
+.order-card{background:#fff;border:1px solid var(--line);border-radius:18px;padding:20px;margin-bottom:14px}.order-head{display:flex;justify-content:space-between;gap:15px}.status{padding:5px 10px;background:#edf4ee;color:#4f6d57;border-radius:999px;font-size:12px;font-weight:900}table{width:100%;border-collapse:collapse;background:#fff;border-radius:16px;overflow:hidden}th,td{text-align:left;padding:12px;border-bottom:1px solid var(--line);font-size:13px}th{background:var(--blush)}.admin-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:24px}.kpi{background:#fff;border:1px solid var(--line);border-radius:18px;padding:20px}.kpi b{display:block;font-size:28px;color:var(--deep)}
+footer{background:#2e2025;color:#d9ccd0;padding:46px 22px}.footerin{max-width:1180px;margin:auto;display:flex;justify-content:space-between;gap:34px}.footer-logo{color:#fff;font:700 24px Georgia,serif;letter-spacing:3px}.small{font-size:12px}.center{text-align:center}.empty{padding:52px 20px;text-align:center;background:#fff;border:1px solid var(--line);border-radius:20px}.mobile-nav{display:none}
+@media(max-width:820px){.topin{height:64px;padding:0 15px}.nav a.hide-m{display:none}.hero{min-height:auto;grid-template-columns:1fr;padding:34px 24px;border-radius:22px}.hero h1{font-size:42px}.hero-art{max-width:360px;margin:auto;width:100%}.grid,.values{grid-template-columns:repeat(2,1fr)}.story,.detail{grid-template-columns:1fr}.page{padding:22px 14px 105px}.section{padding:40px 0}.section h2{font-size:30px}.row{grid-template-columns:1fr}.cart-row{grid-template-columns:70px 1fr auto}.cart-row .cart-price,.cart-row .cart-qty{grid-column:2}.cart-row .thumb{width:70px;height:70px}.admin-grid{grid-template-columns:repeat(2,1fr)}.footerin{display:block}table{display:block;overflow-x:auto}.mobile-nav{display:flex;position:fixed;left:12px;right:12px;bottom:10px;z-index:40;background:#fff;border:1px solid var(--line);box-shadow:0 10px 30px #301d2633;border-radius:18px;padding:9px;justify-content:space-around;font-size:12px;font-weight:800}.mobile-nav a{text-align:center}.mobile-nav span{display:block;font-size:18px}}
+@media(max-width:520px){.grid,.values{grid-template-columns:1fr}.hero h1{font-size:36px}.hero-art b{font-size:42px}.detail h1{font-size:34px}.section-head{align-items:start;flex-direction:column}.formbox{padding:22px 18px}}
 </style></head><body>
-<div class="top"><div class="topin"><a class="logo" href="{{url_for('home')}}">AI <span>HR</span> LAB</a><span class="tag">Evidence-Based Hiring System</span><nav><a class="hide-m" href="{{url_for('services')}}">서비스</a><a class="hide-m" href="{{url_for('diagnosis')}}">무료 채용진단</a>{% if user %}<a href="{{url_for('dashboard')}}">기업 대시보드</a><a href="{{url_for('logout')}}">로그아웃</a>{% else %}<a href="{{url_for('login')}}">로그인</a><a class="btn" href="{{url_for('diagnosis')}}">무료 진단</a>{% endif %}</nav></div></div>
-{% with msgs=get_flashed_messages() %}{% for m in msgs %}<div class="flash">{{m}}</div>{% endfor %}{% endwith %}
-<div class="page">{{body|safe}}</div>
-<div class="footer"><div class="footerin"><div><b>AI HR LAB</b><br><span class="small">답변의 화려함이 아니라 직무역량을 보여주는 행동증거를 평가합니다.</span></div><div class="small">기업용 구조화 채용·면접 솔루션<br>© 2026 AI HR LAB</div></div></div>
-</body></html>'''
+<div class="announcement">자연에서 찾은 균형 · 정직하게 확인된 정보만 전합니다</div>
+<header class="top"><div class="topin"><a class="logo" href="{{url_for('home')}}">BOJJIMI<small>RUBIE COSMETICS</small></a><nav class="nav"><a class="hide-m" href="{{url_for('shop')}}">제품</a><a class="hide-m" href="{{url_for('brand')}}">브랜드</a>{% if user %}<a class="hide-m" href="{{url_for('mypage')}}">마이페이지</a>{% if user['role']=='admin' %}<a href="{{url_for('admin')}}">관리자</a>{% endif %}<a class="hide-m" href="{{url_for('logout')}}">로그아웃</a>{% else %}<a class="hide-m" href="{{url_for('login')}}">로그인</a>{% endif %}<a href="{{url_for('cart')}}">장바구니 <span class="cart-count">{{cart_count}}</span></a></nav></div></header>
+{% with messages=get_flashed_messages() %}{% for message in messages %}<div class="flash">{{message}}</div>{% endfor %}{% endwith %}<main class="page">{{body|safe}}</main>
+<footer><div class="footerin"><div><div class="footer-logo">BOJJIMI</div><p class="small">RUBIE의 자연유래 화장품을 소개하는 공식 온라인 스토어</p></div><div class="small">고객센터·사업자정보·통신판매업 정보는 판매 개시 전 확정해 표시하세요.<br>© 2026 BOJJIMI. All rights reserved.</div></div></footer>
+<nav class="mobile-nav"><a href="{{url_for('home')}}"><span>⌂</span>홈</a><a href="{{url_for('shop')}}"><span>◫</span>제품</a><a href="{{url_for('cart')}}"><span>🛒</span>장바구니</a><a href="{{url_for('mypage') if user else url_for('login')}}"><span>○</span>마이</a></nav></body></html>
+"""
 
-def page(title, body, **ctx):
-    return render_template_string(BASE,title=title,body=body,user=current_user(),**ctx)
 
-@app.route('/')
+def page(title, body, **context):
+    cart_count = sum(int(v) for v in session.get("cart", {}).values())
+    return render_template_string(BASE, title=title, body=body, user=current_user(), cart_count=cart_count, **context)
+
+
+@app.route("/")
 def home():
-    body=render_template_string('''
-<section class="hero"><div><div class="eyebrow">STRUCTURED INTERVIEW · EVIDENCE CHECK™</div><h1>감(感)이 아니라<br>근거로 채용하세요.</h1><p>전문 HR 인력이 부족한 기업을 위해 직무분석부터 구조화 면접, 행동증거 확인, 지원자 평가까지 한 번에 설계합니다.</p><p><a class="btn" href="{{url_for('diagnosis')}}">5분 무료 채용진단</a> <a class="btn ghost" href="{{url_for('services')}}">서비스 보기</a></p></div><div class="hero-card"><h3>기업이 받는 결과물</h3><div class="flow"><div>01. 직무분석 & 핵심역량 모델</div><div>02. 구조화 면접 질문 + 추가확인 질문</div><div>03. Evidence Check™ 행동증거 검증</div><div>04. 면접관 기록지 & 지원자 평가표</div><div>05. 종합의견서 & 채용 의사결정 근거</div></div></div></section>
-<section class="section"><span class="badge">WHY AI HR LAB</span><h2>질문을 파는 회사가 아닙니다.</h2><p class="lead">기업이 더 일관되고 설명 가능한 채용판단을 할 수 있도록 ‘면접 의사결정 시스템’을 제공합니다.</p><div class="grid3"><div class="card feature"><b>직무 기반</b>추상적인 인재상이 아니라 실제 업무에서 필요한 행동을 기준으로 설계합니다.</div><div class="card feature"><b>Evidence Check™</b>지원자의 주장과 확인된 사실을 분리하고 추가확인 질문으로 행동증거를 찾습니다.</div><div class="card feature"><b>사람이 최종 판단</b>AI는 질문·기록·근거정리를 보조하고 최종 채용판단은 기업의 면접관이 합니다.</div></div></section>
-<section class="section evidence"><span class="badge green">EVIDENCE CHECK™</span><h2>“고객 만족도를 크게 높였습니다.”</h2><div class="cols"><div><b>CLAIM</b><br>고객 만족도가 크게 향상됨</div><div><b>EVIDENCE</b><br>불만접수 12건 → 5건<br>절차 개선 실행 참여</div><div><b>GAP</b><br>만족도 자체의 직접 측정자료는 미확인</div></div></section>
-<section class="section"><h2>서비스</h2><p class="lead">첫 채용부터 반복채용까지 필요한 만큼 선택하세요.</p><div class="grid4">{% for key,s in services.items() %}<div class="card"><span class="badge">{{s.name}}</span><h3>{{s.desc}}</h3><div class="price">{{s.price|money}}{{' /월' if key=='partner' else ''}}</div><a class="btn {{'dark' if key=='pro' else 'ghost'}}" href="{{url_for('order_service',service_key=key)}}">의뢰하기</a></div>{% endfor %}</div></section>
-<section class="section"><h2>이용 방식</h2><div class="grid4"><div class="card step"><b>기업정보 입력</b><br><span class="muted">직무·인원·업무·채용 고민</span></div><div class="card step"><b>직무 분석</b><br><span class="muted">역량과 평가요소 설계</span></div><div class="card step"><b>맞춤 제작</b><br><span class="muted">질문·평가기준·기록지</span></div><div class="card step"><b>기업 납품</b><br><span class="muted">바로 면접에 사용</span></div></div></section>
-''',services=SERVICES)
-    return page('기업 채용을 설계하다',body)
+    con = db()
+    products = con.execute("SELECT * FROM products WHERE status IN ('active','coming') ORDER BY featured DESC,id DESC LIMIT 6").fetchall()
+    con.close()
+    body = render_template_string("""
+    <section class="hero"><div><div class="eyebrow">BOJJIMI × RUBIE</div><h1>나를 위한<br>정직한 아름다움</h1><p>자연유래 원료의 장점과 편안한 사용감을 함께 고민합니다. 과장된 약속 대신 확인된 정보와 섬세한 제품 경험을 전합니다.</p><div class="actions"><a class="btn" href="{{url_for('shop')}}">제품 만나보기</a><a class="btn ghost" href="{{url_for('brand')}}">루비에 이야기</a></div></div><div class="hero-art"><div><b>RUBIE</b><span>NATURAL BALANCE</span></div></div></section>
+    <section class="section"><div class="section-head"><div><div class="eyebrow">OUR PRODUCTS</div><h2>루비에 제품</h2><p class="lead">두피부터 피부까지, 매일 편안하게 사용할 제품을 준비합니다.</p></div><a class="btn ghost small" href="{{url_for('shop')}}">전체 보기</a></div>
+    {% if products %}<div class="grid">{% for p in products %}<a class="card" href="{{url_for('product_detail',product_id=p['id'])}}"><div class="product-visual">{% if p['image_url'] %}<img src="{{p['image_url']}}" alt="{{p['name']}}">{% else %}<div class="bottle">R</div>{% endif %}{% if p['badge'] %}<span class="badge">{{p['badge']}}</span>{% endif %}</div><div class="card-body"><div class="category">{{p['category']}}</div><h3>{{p['name']}}</h3><p class="muted">{{p['short_desc']}}</p>{% if p['status']=='active' %}<div class="price">{{(p['sale_price'] if p['sale_price'] is not none else p['price'])|won}}{% if p['sale_price'] is not none %}<span class="old-price">{{p['price']|won}}</span>{% endif %}</div>{% else %}<div class="price" style="color:var(--rose)">출시 준비 중</div>{% endif %}</div></a>{% endfor %}</div>{% else %}<div class="empty">첫 제품을 준비하고 있습니다.</div>{% endif %}</section>
+    <section class="section"><div class="values"><div class="value"><div class="num">01</div><h3>확인된 정보</h3><p class="muted">근거 없이 효능을 과장하지 않고 제품의 실제 역할을 분명하게 안내합니다.</p></div><div class="value"><div class="num">02</div><h3>편안한 사용감</h3><p class="muted">매일 손이 가는 향, 제형과 마무리감을 중요하게 생각합니다.</p></div><div class="value"><div class="num">03</div><h3>책임 있는 판매</h3><p class="muted">전성분, 사용법과 주의사항을 투명하게 공개합니다.</p></div></div></section>
+    <section class="section story"><div><div class="eyebrow" style="color:#e8b7c4">RUBIE STORY</div><h2>좋은 원료만큼<br>중요한 것은 균형입니다.</h2><p>루비에는 자연유래 원료를 맹목적으로 강조하지 않습니다. 안전성, 안정성, 사용감과 필요한 기능이 조화를 이루는 제품을 지향합니다.</p></div><div class="story-note"><b>현재 준비 중인 첫 제품</b><h3>보태니컬 두피 샴푸</h3><p>풍성한 거품과 만족스러운 향은 살리고, 세정 후 뻣뻣함을 줄이는 방향으로 정식 제품화를 준비하고 있습니다.</p></div></section>
+    """, products=products)
+    return page("루비에 공식 화장품몰", body)
 
-@app.route('/services')
-def services():
-    body=render_template_string('''<section class="section center"><span class="badge">SERVICES</span><h2>기업 상황에 맞는 채용 솔루션</h2><p class="lead">현재 가격은 초기 시장검증용 제안가이며 실제 판매 데이터를 기반으로 조정됩니다.</p></section><div class="grid4">{% for key,s in services.items() %}<div class="card"><span class="badge">{{s.name}}</span><h3>{{s.desc}}</h3><div class="price">{{s.price|money}}{{' /월' if key=='partner' else ''}}</div><ul class="clean">{% for i in s['items'] %}<li>{{i}}</li>{% endfor %}</ul><a class="btn {{'dark' if key=='pro' else 'ghost'}}" href="{{url_for('order_service',service_key=key)}}">{{s.name}} 시작하기</a></div>{% endfor %}</div><div class="notice" style="margin-top:24px">※ AI HR LAB은 채용 의사결정을 자동으로 대신하지 않습니다. 직무 관련 질문 설계, 면접 기록, 행동증거 확인과 평가근거 정리를 지원합니다.</div>''',services=SERVICES)
-    return page('서비스',body)
 
-@app.route('/diagnosis',methods=['GET','POST'])
-def diagnosis():
-    if request.method=='POST':
-        con=db(); con.execute('INSERT INTO diagnoses(company,industry,role,headcount,hiring_issue,email,created_at) VALUES(?,?,?,?,?,?,?)',(
-            request.form.get('company'),request.form.get('industry'),request.form.get('role'),request.form.get('headcount'),request.form.get('hiring_issue'),request.form.get('email'),datetime.now().isoformat(timespec='minutes'))); con.commit(); con.close()
-        return redirect(url_for('diagnosis_result',role=request.form.get('role','채용직무')))
-    body='''<div class="formbox"><span class="badge">FREE DIAGNOSIS</span><h2>5분 채용진단</h2><p class="muted">현재 면접방식과 채용 고민을 알려주세요. 구조화가 필요한 지점을 확인합니다.</p><form method="post"><div class="row"><div class="field"><label>기업명</label><input name="company" required></div><div class="field"><label>업종</label><input name="industry" placeholder="예: 건강검진센터"></div></div><div class="row"><div class="field"><label>채용 직무</label><input name="role" required placeholder="예: 고객상담"></div><div class="field"><label>채용 인원</label><input name="headcount" placeholder="예: 2명"></div></div><div class="field"><label>현재 가장 어려운 점</label><textarea name="hiring_issue" placeholder="예: 면접관마다 평가가 다르고 질문이 즉흥적입니다."></textarea></div><div class="field"><label>결과 받을 이메일</label><input type="email" name="email" required></div><button class="btn" type="submit">무료 진단 결과 보기</button></form></div>'''
-    return page('무료 채용진단',body)
+@app.route("/shop")
+def shop():
+    category, query = request.args.get("category", "").strip(), request.args.get("q", "").strip()
+    sql, params = "SELECT * FROM products WHERE status IN ('active','coming')", []
+    if category in CATEGORIES:
+        sql += " AND category=?"; params.append(category)
+    if query:
+        sql += " AND (name LIKE ? OR short_desc LIKE ? OR description LIKE ?)"; params.extend([f"%{query}%"]*3)
+    con = db(); products = con.execute(sql + " ORDER BY featured DESC,id DESC", params).fetchall(); con.close()
+    body = render_template_string("""
+    <section class="section" style="padding-top:12px"><div class="eyebrow">RUBIE SHOP</div><h2>제품</h2><div class="shopbar"><div class="filters"><a class="pill {{'active' if not category else ''}}" href="{{url_for('shop')}}">전체</a>{% for c in categories %}<a class="pill {{'active' if category==c else ''}}" href="{{url_for('shop',category=c)}}">{{c}}</a>{% endfor %}</div><form><input name="q" value="{{query}}" placeholder="제품 검색" style="padding:10px 13px;border:1px solid var(--line);border-radius:999px"><button class="btn small">검색</button></form></div>
+    {% if products %}<div class="grid">{% for p in products %}<a class="card" href="{{url_for('product_detail',product_id=p['id'])}}"><div class="product-visual">{% if p['image_url'] %}<img src="{{p['image_url']}}" alt="{{p['name']}}">{% else %}<div class="bottle">R</div>{% endif %}{% if p['badge'] %}<span class="badge">{{p['badge']}}</span>{% endif %}</div><div class="card-body"><div class="category">{{p['category']}}</div><h3>{{p['name']}}</h3><p class="muted">{{p['short_desc']}}</p>{% if p['status']=='active' %}<div class="price">{{(p['sale_price'] if p['sale_price'] is not none else p['price'])|won}}</div>{% else %}<div class="price" style="color:var(--rose)">출시 준비 중</div>{% endif %}</div></a>{% endfor %}</div>{% else %}<div class="empty">조건에 맞는 제품이 없습니다.</div>{% endif %}</section>
+    """, products=products, categories=CATEGORIES, category=category, query=query)
+    return page("제품", body)
 
-@app.route('/diagnosis/result')
-def diagnosis_result():
-    role=request.args.get('role','해당 직무')
-    body=render_template_string('''<div class="formbox"><span class="badge green">DIAGNOSIS COMPLETE</span><h2>{{role}} 채용의 구조화가 필요합니다.</h2><p>무료진단 단계에서는 아래 4가지를 우선 점검합니다.</p><ul class="clean"><li>모든 지원자에게 공통 핵심질문이 있는가</li><li>질문이 실제 직무역량과 연결되는가</li><li>면접관이 동일한 행동기준으로 점수를 주는가</li><li>지원자의 주장과 확인된 행동증거를 구분하는가</li></ul><p class="notice">다음 단계에서는 실제 직무정보를 기반으로 질문·추가확인·행동평가기준을 맞춤 설계합니다.</p><a class="btn dark" href="{{url_for('order_service',service_key='pro')}}">PRO 면접시스템 의뢰하기</a> <a class="btn ghost" href="{{url_for('services')}}">상품 비교</a></div>''',role=role)
-    return page('진단 결과',body)
 
-@app.route('/register',methods=['GET','POST'])
+@app.route("/product/<int:product_id>")
+def product_detail(product_id):
+    con = db(); product = con.execute("SELECT * FROM products WHERE id=?", (product_id,)).fetchone(); con.close()
+    user = current_user()
+    if not product or (product["status"] == "draft" and (not user or user["role"] != "admin")):
+        abort(404)
+    body = render_template_string("""
+    <section class="detail"><div class="product-visual">{% if p['image_url'] %}<img src="{{p['image_url']}}" alt="{{p['name']}}">{% else %}<div class="bottle">R</div>{% endif %}{% if p['badge'] %}<span class="badge">{{p['badge']}}</span>{% endif %}</div><div><div class="category">{{p['category']}}</div><h1>{{p['name']}}</h1><p class="lead">{{p['short_desc']}}</p>{% if p['status']=='active' %}<p class="detail-price">{{(p['sale_price'] if p['sale_price'] is not none else p['price'])|won}}</p><form method="post" action="{{url_for('add_cart',product_id=p['id'])}}"><input class="qty" type="number" name="quantity" value="1" min="1" max="{{p['stock']}}"><button class="btn dark" {% if p['stock']<1 %}disabled{% endif %}>{{'장바구니 담기' if p['stock']>0 else '품절'}}</button></form>{% else %}<div class="notice" style="margin-top:24px">정식 판매 전 처방·표시사항·품질 검토 단계입니다. 판매가 시작되면 가격과 전성분을 공개합니다.</div>{% endif %}
+    <div class="info-table"><div class="info-row"><b>제품 설명</b><span>{{p['description'] or '상세정보 준비 중'}}</span></div><div class="info-row"><b>전성분</b><span>{{p['ingredients'] or '정식 처방 확정 후 공개 예정'}}</span></div><div class="info-row"><b>사용법</b><span>{{p['usage']}}</span></div><div class="info-row"><b>주의사항</b><span>{{p['caution']}}</span></div><div class="info-row"><b>배송</b><span>5만원 이상 무료배송 · 기본 배송비 3,000원</span></div></div></div></section>
+    """, p=product)
+    return page(product["name"], body)
+
+
+@app.route("/brand")
+def brand():
+    body = """<section class="section" style="padding-top:12px"><div class="eyebrow">ABOUT RUBIE</div><h2>루비에가 지키는 기준</h2><p class="lead">수제 경험에서 출발하되, 판매 제품은 정식 제조·품질관리와 표시기준을 거쳐 완성합니다.</p></section><section class="story"><div><h2>자연유래 원료를<br>정직하게 사용합니다.</h2><p>‘천연’이라는 단어만 앞세우지 않고 원료의 목적, 함량 근거, 제품 안정성과 실제 사용감을 함께 확인합니다.</p></div><div class="story-note"><b>표현 원칙</b><p>기능성화장품으로 정식 보고되지 않은 제품에는 기능성 효능을 표시하지 않습니다. 객관적으로 확인 가능한 정보만 제품 페이지와 광고에 사용합니다.</p></div></section><section class="section"><div class="values"><div class="value"><div class="num">01</div><h3>처방</h3><p class="muted">원료 하나보다 전체 처방의 안정성과 균형을 봅니다.</p></div><div class="value"><div class="num">02</div><h3>경험</h3><p class="muted">향, 거품, 발림성과 마무리감까지 반복해서 평가합니다.</p></div><div class="value"><div class="num">03</div><h3>정보</h3><p class="muted">전성분과 사용법, 주의사항을 숨김없이 전달합니다.</p></div></div></section>"""
+    return page("브랜드", body)
+
+
+@app.route("/register", methods=["GET", "POST"])
 def register():
-    if request.method=='POST':
+    if request.method == "POST":
+        email = request.form["email"].strip().lower()
+        role = "admin" if ADMIN_EMAIL and email == ADMIN_EMAIL else "customer"
         try:
-            con=db(); con.execute('INSERT INTO users(email,password,company,contact_name,phone,created_at) VALUES(?,?,?,?,?,?)',(
-                request.form['email'].strip().lower(),pw_hash(request.form['password']),request.form['company'],request.form['contact_name'],request.form.get('phone',''),datetime.now().isoformat(timespec='minutes'))); con.commit(); con.close(); flash('기업회원 가입이 완료되었습니다. 로그인해 주세요.'); return redirect(url_for('login'))
-        except sqlite3.IntegrityError: flash('이미 가입된 이메일입니다.')
-    body='''<div class="formbox"><h2>기업회원 가입</h2><form method="post"><div class="field"><label>기업명</label><input name="company" required></div><div class="field"><label>담당자명</label><input name="contact_name" required></div><div class="field"><label>이메일</label><input type="email" name="email" required></div><div class="field"><label>연락처</label><input name="phone"></div><div class="field"><label>비밀번호</label><input type="password" name="password" required minlength="6"></div><button class="btn" type="submit">가입하기</button></form></div>'''
-    return page('기업회원 가입',body)
+            con = db(); cur = con.execute("INSERT INTO users(email,password_hash,name,phone,role,created_at) VALUES(?,?,?,?,?,?)", (email, generate_password_hash(request.form["password"]), request.form["name"].strip(), request.form.get("phone", "").strip(), role, now())); con.commit(); user_id = cur.lastrowid; con.close()
+            session["user_id"] = user_id; flash("보찌미 회원가입이 완료되었습니다."); return redirect(url_for("mypage"))
+        except sqlite3.IntegrityError:
+            flash("이미 가입된 이메일입니다.")
+    return page("회원가입", """<div class="formbox"><div class="eyebrow">JOIN BOJJIMI</div><h2>회원가입</h2><form method="post"><div class="field"><label>이름</label><input name="name" required></div><div class="field"><label>이메일</label><input type="email" name="email" required></div><div class="field"><label>휴대전화</label><input name="phone" required></div><div class="field"><label>비밀번호</label><input type="password" name="password" minlength="8" required></div><button class="btn dark">가입하기</button></form><p class="muted small">가입하면 주문내역과 배송상태를 확인할 수 있습니다.</p></div>""")
 
-@app.route('/login',methods=['GET','POST'])
+
+@app.route("/login", methods=["GET", "POST"])
 def login():
-    if request.method=='POST':
-        con=db(); u=con.execute('SELECT * FROM users WHERE email=? AND password=?',(request.form['email'].strip().lower(),pw_hash(request.form['password']))).fetchone(); con.close()
-        if u:
-            session['user_id']=u['id']; flash(f"{u['company']} 담당자님, 환영합니다."); return redirect(request.args.get('next') or url_for('dashboard'))
-        flash('이메일 또는 비밀번호를 확인해 주세요.')
-    body='''<div class="formbox"><h2>기업회원 로그인</h2><form method="post"><div class="field"><label>이메일</label><input type="email" name="email" required></div><div class="field"><label>비밀번호</label><input type="password" name="password" required></div><button class="btn" type="submit">로그인</button> <a class="btn ghost" href="{{url_for('register')}}">기업회원 가입</a></form></div>'''
-    return page('로그인',render_template_string(body))
+    if request.method == "POST":
+        con = db(); user = con.execute("SELECT * FROM users WHERE email=?", (request.form["email"].strip().lower(),)).fetchone(); con.close()
+        if user and check_password_hash(user["password_hash"], request.form["password"]):
+            session["user_id"] = user["id"]; flash(f"{user['name']}님, 반갑습니다."); return redirect(request.args.get("next") or url_for("mypage"))
+        flash("이메일 또는 비밀번호를 확인해 주세요.")
+    return page("로그인", """<div class="formbox"><div class="eyebrow">WELCOME BACK</div><h2>로그인</h2><form method="post"><div class="field"><label>이메일</label><input type="email" name="email" required></div><div class="field"><label>비밀번호</label><input type="password" name="password" required></div><button class="btn dark">로그인</button> <a class="btn ghost" href="/register">회원가입</a></form></div>""")
 
-@app.route('/logout')
-def logout(): session.clear(); return redirect(url_for('home'))
 
-@app.route('/order/<service_key>',methods=['GET','POST'])
-def order_service(service_key):
-    if service_key not in SERVICES: return redirect(url_for('services'))
-    if not session.get('user_id'): return redirect(url_for('login',next=request.path))
-    s=SERVICES[service_key]
-    if request.method=='POST':
-        con=db(); con.execute('INSERT INTO projects(user_id,service_key,role,headcount,experience,duties,competencies,concern,status,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)',(
-            session['user_id'],service_key,request.form['role'],request.form.get('headcount'),request.form.get('experience'),request.form.get('duties'),request.form.get('competencies'),request.form.get('concern'),'접수완료',datetime.now().isoformat(timespec='minutes'))); con.commit(); con.close(); flash('프로젝트가 접수되었습니다. 현재 프로토타입에서는 결제 대신 주문접수까지 진행됩니다.'); return redirect(url_for('dashboard'))
-    body=render_template_string('''<div class="formbox"><span class="badge">{{s.name}}</span><h2>{{s.desc}}</h2><div class="price">{{s.price|money}}{{' /월' if service_key=='partner' else ''}}</div><form method="post"><div class="row"><div class="field"><label>채용 직무</label><input name="role" required></div><div class="field"><label>채용 인원</label><input name="headcount"></div></div><div class="field"><label>경력 조건</label><input name="experience" placeholder="예: 신입·경력 모두 가능"></div><div class="field"><label>주요 업무</label><textarea name="duties" placeholder="실제 수행할 업무를 가능한 구체적으로 입력해 주세요."></textarea></div><div class="field"><label>특히 보고 싶은 역량</label><input name="competencies" placeholder="예: 고객응대, 문제해결, 정확성"></div><div class="field"><label>현재 채용의 고민</label><textarea name="concern"></textarea></div><button class="btn dark" type="submit">프로젝트 접수</button></form></div>''',s=s,service_key=service_key)
-    return page(f'{s["name"]} 의뢰',body)
+@app.route("/logout")
+def logout():
+    session.pop("user_id", None); flash("로그아웃되었습니다."); return redirect(url_for("home"))
 
-@app.route('/dashboard')
-@user_required
-def dashboard():
-    u=current_user(); con=db(); projects=con.execute('SELECT * FROM projects WHERE user_id=? ORDER BY id DESC',(u['id'],)).fetchall(); con.close()
-    body=render_template_string('''<section class="section"><span class="badge">COMPANY DASHBOARD</span><h2>{{u.company}} 채용 프로젝트</h2><p class="lead">주문한 직무별 면접시스템의 제작·납품 상태를 관리합니다.</p><div class="grid3"><div class="card"><div class="muted">진행 프로젝트</div><div class="kpi">{{projects|length}}</div></div><div class="card"><div class="muted">Evidence Check™</div><div class="kpi">ON</div></div><div class="card"><div class="muted">담당자</div><div class="kpi" style="font-size:20px">{{u.contact_name}}</div></div></div></section><section class="section"><h2>프로젝트 목록</h2>{% if projects %}{% for p in projects %}<div class="card project" style="margin-bottom:12px"><div><b>#{{p.id}} · {{p.role}}</b><br><span class="muted">{{services[p.service_key].name}} · {{p.created_at}}</span></div><span class="status">{{p.status}}</span></div>{% endfor %}{% else %}<div class="card center"><p>아직 프로젝트가 없습니다.</p><a class="btn" href="{{url_for('services')}}">첫 프로젝트 시작</a></div>{% endif %}</section>''',u=u,projects=projects,services=SERVICES)
-    return page('기업 대시보드',body)
 
-if __name__=='__main__':
-    app.run(host='0.0.0.0',port=int(os.environ.get('PORT',5000)),debug=True)
+@app.post("/cart/add/<int:product_id>")
+def add_cart(product_id):
+    con = db(); product = con.execute("SELECT * FROM products WHERE id=? AND status='active'", (product_id,)).fetchone(); con.close()
+    if not product or product["stock"] < 1:
+        flash("현재 구매할 수 없는 제품입니다."); return redirect(url_for("shop"))
+    quantity = max(1, min(int(request.form.get("quantity", 1)), product["stock"]))
+    cart = session.get("cart", {}); cart[str(product_id)] = min(int(cart.get(str(product_id), 0)) + quantity, product["stock"]); session["cart"] = cart
+    flash("장바구니에 담았습니다."); return redirect(url_for("cart"))
 
+
+@app.route("/cart", methods=["GET", "POST"])
+def cart():
+    if request.method == "POST":
+        values = session.get("cart", {})
+        for key in list(values):
+            if request.form.get(f"qty_{key}") is not None:
+                qty = max(0, int(request.form[f"qty_{key}"]))
+                if qty == 0: values.pop(key, None)
+                else: values[key] = qty
+        session["cart"] = values; flash("장바구니가 수정되었습니다."); return redirect(url_for("cart"))
+    items, subtotal, shipping, total = cart_data()
+    body = render_template_string("""
+    <section class="section" style="padding-top:12px"><div class="eyebrow">YOUR BAG</div><h2>장바구니</h2>{% if items %}<form method="post">{% for item in items %}<div class="cart-row"><div class="thumb">RUBIE</div><div><b>{{item.product['name']}}</b><div class="muted small">{{item.product['category']}}</div></div><div class="cart-price">{{item.unit_price|won}}</div><div class="cart-qty"><input class="qty" type="number" min="0" max="{{item.product['stock']}}" name="qty_{{item.product['id']}}" value="{{item.quantity}}"></div><b>{{item.line_total|won}}</b></div>{% endfor %}<div class="actions"><button class="btn ghost">수량 변경</button></div></form><div class="summary"><div class="summary-line"><span>상품금액</span><b>{{subtotal|won}}</b></div><div class="summary-line"><span>배송비</span><b>{{shipping|won}}</b></div><div class="summary-line total"><span>총 결제금액</span><span>{{total|won}}</span></div><a class="btn dark" style="width:100%;margin-top:15px" href="{{url_for('checkout')}}">주문하기</a></div>{% else %}<div class="empty"><h3>장바구니가 비어 있습니다.</h3><a class="btn" href="{{url_for('shop')}}">제품 보러가기</a></div>{% endif %}</section>
+    """, items=items, subtotal=subtotal, shipping=shipping, total=total)
+    return page("장바구니", body)
+
+
+@app.route("/checkout", methods=["GET", "POST"])
+def checkout():
+    items, subtotal, shipping, total = cart_data()
+    if not items:
+        flash("장바구니가 비어 있습니다."); return redirect(url_for("shop"))
+    user = current_user()
+    if request.method == "POST":
+        order_no = datetime.now().strftime("BJ%Y%m%d") + secrets.token_hex(3).upper()
+        con = db()
+        try:
+            cur = con.execute("""INSERT INTO orders(order_no,user_id,buyer_name,email,phone,postcode,address1,address2,memo,payment_method,subtotal,shipping_fee,total,status,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", (order_no, user["id"] if user else None, request.form["buyer_name"].strip(), request.form["email"].strip().lower(), request.form["phone"].strip(), request.form.get("postcode", "").strip(), request.form["address1"].strip(), request.form.get("address2", "").strip(), request.form.get("memo", "").strip(), "bank", subtotal, shipping, total, "주문접수", now()))
+            order_id = cur.lastrowid
+            for item in items:
+                latest = con.execute("SELECT stock,status FROM products WHERE id=?", (item["product"]["id"],)).fetchone()
+                if not latest or latest["status"] != "active" or latest["stock"] < item["quantity"]: raise ValueError(f"{item['product']['name']}의 재고가 부족합니다.")
+                con.execute("INSERT INTO order_items(order_id,product_id,product_name,unit_price,quantity) VALUES(?,?,?,?,?)", (order_id, item["product"]["id"], item["product"]["name"], item["unit_price"], item["quantity"]))
+                con.execute("UPDATE products SET stock=stock-?,updated_at=? WHERE id=?", (item["quantity"], now(), item["product"]["id"]))
+            con.commit()
+        except Exception as exc:
+            con.rollback(); con.close(); flash(str(exc)); return redirect(url_for("cart"))
+        con.close(); session["cart"] = {}; session["last_order_no"] = order_no
+        return redirect(url_for("order_complete", order_no=order_no))
+    body = render_template_string("""
+    <div class="formbox"><div class="eyebrow">CHECKOUT</div><h2>{{'회원 주문' if user else '비회원 주문'}}</h2>{% if not user %}<div class="notice">회원가입 없이도 주문할 수 있습니다. 주문번호를 꼭 보관해 주세요.</div>{% endif %}<form method="post"><div class="row"><div class="field"><label>주문자명</label><input name="buyer_name" value="{{user['name'] if user else ''}}" required></div><div class="field"><label>휴대전화</label><input name="phone" value="{{user['phone'] if user else ''}}" required></div></div><div class="field"><label>이메일</label><input type="email" name="email" value="{{user['email'] if user else ''}}" required></div><div class="row"><div class="field"><label>우편번호</label><input name="postcode"></div><div class="field"><label>배송 요청사항</label><input name="memo"></div></div><div class="field"><label>주소</label><input name="address1" required></div><div class="field"><label>상세주소</label><input name="address2"></div><div class="notice">현재 주문 접수형 결제 단계입니다. 실제 카드결제는 PG사 계약과 결제키 등록 후 활성화됩니다.</div><div class="summary-line total"><span>주문금액</span><span>{{total|won}}</span></div><button class="btn dark" style="width:100%;margin-top:16px">주문 접수하기</button></form></div>
+    """, user=user, total=total)
+    return page("주문/결제", body)
+
+
+@app.route("/order/complete/<order_no>")
+def order_complete(order_no):
+    if session.get("last_order_no") != order_no and not session.get("user_id"): abort(403)
+    con = db(); order = con.execute("SELECT * FROM orders WHERE order_no=?", (order_no,)).fetchone(); con.close()
+    if not order: abort(404)
+    body = render_template_string("""<div class="formbox center"><div class="eyebrow">ORDER COMPLETE</div><h2>주문이 접수되었습니다.</h2><p>주문번호</p><p style="font-size:26px;font-weight:900;color:var(--rose)">{{o['order_no']}}</p><p class="muted">결제 및 배송 안내는 입력하신 연락처로 전달됩니다.</p><div class="summary-line total"><span>주문금액</span><span>{{o['total']|won}}</span></div><a class="btn dark" href="{{url_for('mypage') if user else url_for('home')}}">{{'주문내역 보기' if user else '홈으로'}}</a></div>""", o=order, user=current_user())
+    return page("주문 완료", body)
+
+
+@app.route("/mypage")
+@login_required
+def mypage():
+    user = current_user(); con = db(); orders = con.execute("SELECT * FROM orders WHERE user_id=? ORDER BY id DESC", (user["id"],)).fetchall(); con.close()
+    body = render_template_string("""<section class="section" style="padding-top:12px"><div class="eyebrow">MY BOJJIMI</div><h2>{{user['name']}}님의 주문</h2>{% if orders %}{% for o in orders %}<a class="order-card" style="display:block" href="{{url_for('member_order',order_no=o['order_no'])}}"><div class="order-head"><div><b>{{o['order_no']}}</b><div class="muted small">{{o['created_at']}}</div></div><span class="status">{{o['status']}}</span></div><div class="summary-line"><span>결제금액</span><b>{{o['total']|won}}</b></div></a>{% endfor %}{% else %}<div class="empty"><p>아직 주문내역이 없습니다.</p><a class="btn" href="{{url_for('shop')}}">제품 둘러보기</a></div>{% endif %}</section>""", user=user, orders=orders)
+    return page("마이페이지", body)
+
+
+@app.route("/mypage/order/<order_no>")
+@login_required
+def member_order(order_no):
+    user = current_user(); con = db(); order = con.execute("SELECT * FROM orders WHERE order_no=? AND user_id=?", (order_no, user["id"])).fetchone()
+    if not order: con.close(); abort(404)
+    items = con.execute("SELECT * FROM order_items WHERE order_id=?", (order["id"],)).fetchall(); con.close()
+    body = render_template_string("""<div class="formbox"><div class="order-head"><div><div class="eyebrow">ORDER DETAIL</div><h2>{{o['order_no']}}</h2></div><span class="status">{{o['status']}}</span></div>{% for item in items %}<div class="summary-line"><span>{{item['product_name']}} × {{item['quantity']}}</span><b>{{(item['unit_price']*item['quantity'])|won}}</b></div>{% endfor %}<div class="summary-line total"><span>총 결제금액</span><span>{{o['total']|won}}</span></div><p class="muted small">배송지: {{o['address1']}} {{o['address2']}}</p></div>""", o=order, items=items)
+    return page("주문 상세", body)
+
+
+@app.route("/admin")
+@admin_required
+def admin():
+    con = db()
+    stats = {"products": con.execute("SELECT COUNT(*) FROM products").fetchone()[0], "active": con.execute("SELECT COUNT(*) FROM products WHERE status='active'").fetchone()[0], "orders": con.execute("SELECT COUNT(*) FROM orders").fetchone()[0], "sales": con.execute("SELECT COALESCE(SUM(total),0) FROM orders WHERE status!='취소'").fetchone()[0]}
+    products = con.execute("SELECT * FROM products ORDER BY id DESC").fetchall(); orders = con.execute("SELECT * FROM orders ORDER BY id DESC LIMIT 30").fetchall(); con.close()
+    body = render_template_string("""
+    <section class="section" style="padding-top:12px"><div class="eyebrow">STORE ADMIN</div><h2>보찌미 관리자</h2><div class="admin-grid"><div class="kpi">전체 제품<b>{{s.products}}</b></div><div class="kpi">판매 중<b>{{s.active}}</b></div><div class="kpi">전체 주문<b>{{s.orders}}</b></div><div class="kpi">주문 합계<b style="font-size:20px">{{s.sales|won}}</b></div></div><div class="section-head"><h3>제품 관리</h3><a class="btn small" href="{{url_for('admin_product_new')}}">제품 추가</a></div><table><tr><th>ID</th><th>제품명</th><th>상태</th><th>가격</th><th>재고</th><th></th></tr>{% for p in products %}<tr><td>{{p['id']}}</td><td>{{p['name']}}</td><td>{{p['status']}}</td><td>{{p['price']|won}}</td><td>{{p['stock']}}</td><td><a href="{{url_for('admin_product_edit',product_id=p['id'])}}">수정</a></td></tr>{% endfor %}</table></section><section class="section"><h3>최근 주문</h3><table><tr><th>주문번호</th><th>주문자</th><th>금액</th><th>상태</th><th></th></tr>{% for o in orders %}<tr><td>{{o['order_no']}}</td><td>{{o['buyer_name']}}</td><td>{{o['total']|won}}</td><td>{{o['status']}}</td><td><a href="{{url_for('admin_order_edit',order_id=o['id'])}}">처리</a></td></tr>{% endfor %}</table></section>
+    """, s=type("Stats", (), stats), products=products, orders=orders)
+    return page("관리자", body)
+
+
+def product_form(product=None):
+    return render_template_string("""
+    <div class="formbox"><div class="eyebrow">PRODUCT ADMIN</div><h2>{{'제품 수정' if p else '제품 추가'}}</h2><form method="post"><div class="field"><label>제품명</label><input name="name" value="{{p['name'] if p else ''}}" required></div><div class="row"><div class="field"><label>카테고리</label><select name="category">{% for c in categories %}<option {{'selected' if p and p['category']==c else ''}}>{{c}}</option>{% endfor %}</select></div><div class="field"><label>상태</label><select name="status"><option value="draft" {{'selected' if p and p['status']=='draft' else ''}}>비공개</option><option value="coming" {{'selected' if p and p['status']=='coming' else ''}}>출시 준비</option><option value="active" {{'selected' if p and p['status']=='active' else ''}}>판매 중</option></select></div></div><div class="field"><label>한줄 설명</label><input name="short_desc" value="{{p['short_desc'] if p else ''}}"></div><div class="field"><label>상세 설명</label><textarea name="description">{{p['description'] if p else ''}}</textarea></div><div class="field"><label>전성분</label><textarea name="ingredients">{{p['ingredients'] if p else ''}}</textarea></div><div class="row"><div class="field"><label>정가</label><input type="number" min="0" name="price" value="{{p['price'] if p else 0}}"></div><div class="field"><label>판매가</label><input type="number" min="0" name="sale_price" value="{{p['sale_price'] if p and p['sale_price'] is not none else ''}}"></div></div><div class="row"><div class="field"><label>재고</label><input type="number" min="0" name="stock" value="{{p['stock'] if p else 0}}"></div><div class="field"><label>배지</label><input name="badge" value="{{p['badge'] if p else ''}}"></div></div><div class="field"><label>이미지 URL</label><input type="url" name="image_url" value="{{p['image_url'] if p else ''}}"></div><div class="field"><label>사용법</label><textarea name="usage">{{p['usage'] if p else ''}}</textarea></div><div class="field"><label>주의사항</label><textarea name="caution">{{p['caution'] if p else ''}}</textarea></div><label><input type="checkbox" name="featured" value="1" {{'checked' if p and p['featured'] else ''}}> 메인 추천제품</label><div class="actions"><button class="btn dark">저장</button><a class="btn ghost" href="{{url_for('admin')}}">취소</a></div></form></div>
+    """, p=product, categories=CATEGORIES)
+
+
+def product_payload():
+    sale_price = request.form.get("sale_price", "").strip()
+    return (request.form["name"].strip(), request.form["category"], request.form.get("short_desc", "").strip(), request.form.get("description", "").strip(), request.form.get("ingredients", "").strip(), request.form.get("usage", "").strip(), request.form.get("caution", "").strip(), max(0, int(request.form.get("price") or 0)), int(sale_price) if sale_price else None, max(0, int(request.form.get("stock") or 0)), request.form.get("image_url", "").strip(), request.form.get("badge", "").strip(), request.form.get("status", "draft"), 1 if request.form.get("featured") else 0)
+
+
+@app.route("/admin/product/new", methods=["GET", "POST"])
+@admin_required
+def admin_product_new():
+    if request.method == "POST":
+        con = db(); con.execute("""INSERT INTO products(name,category,short_desc,description,ingredients,usage,caution,price,sale_price,stock,image_url,badge,status,featured,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", product_payload() + (now(), now())); con.commit(); con.close(); flash("제품이 추가되었습니다."); return redirect(url_for("admin"))
+    return page("제품 추가", product_form())
+
+
+@app.route("/admin/product/<int:product_id>", methods=["GET", "POST"])
+@admin_required
+def admin_product_edit(product_id):
+    con = db(); product = con.execute("SELECT * FROM products WHERE id=?", (product_id,)).fetchone()
+    if not product: con.close(); abort(404)
+    if request.method == "POST":
+        con.execute("""UPDATE products SET name=?,category=?,short_desc=?,description=?,ingredients=?,usage=?,caution=?,price=?,sale_price=?,stock=?,image_url=?,badge=?,status=?,featured=?,updated_at=? WHERE id=?""", product_payload() + (now(), product_id)); con.commit(); con.close(); flash("제품 정보가 수정되었습니다."); return redirect(url_for("admin"))
+    con.close(); return page("제품 수정", product_form(product))
+
+
+@app.route("/admin/order/<int:order_id>", methods=["GET", "POST"])
+@admin_required
+def admin_order_edit(order_id):
+    con = db(); order = con.execute("SELECT * FROM orders WHERE id=?", (order_id,)).fetchone()
+    if not order: con.close(); abort(404)
+    if request.method == "POST":
+        status = request.form["status"]
+        if status not in ORDER_STATUSES: abort(400)
+        con.execute("UPDATE orders SET status=? WHERE id=?", (status, order_id)); con.commit(); con.close(); flash("주문상태가 변경되었습니다."); return redirect(url_for("admin"))
+    items = con.execute("SELECT * FROM order_items WHERE order_id=?", (order_id,)).fetchall(); con.close()
+    body = render_template_string("""<div class="formbox"><div class="eyebrow">ORDER ADMIN</div><h2>{{o['order_no']}}</h2><p>{{o['buyer_name']}} · {{o['phone']}} · {{o['email']}}</p><p class="muted">{{o['address1']}} {{o['address2']}}</p>{% for item in items %}<div class="summary-line"><span>{{item['product_name']}} × {{item['quantity']}}</span><b>{{(item['unit_price']*item['quantity'])|won}}</b></div>{% endfor %}<div class="summary-line total"><span>합계</span><span>{{o['total']|won}}</span></div><form method="post"><div class="field"><label>주문상태</label><select name="status">{% for status in statuses %}<option {{'selected' if status==o['status'] else ''}}>{{status}}</option>{% endfor %}</select></div><button class="btn dark">상태 저장</button></form></div>""", o=order, items=items, statuses=ORDER_STATUSES)
+    return page("주문 처리", body)
+
+
+@app.errorhandler(404)
+def not_found(_error):
+    return page("페이지 없음", '<div class="empty"><h2>페이지를 찾을 수 없습니다.</h2><a class="btn" href="/">홈으로</a></div>'), 404
+
+
+@app.errorhandler(403)
+def forbidden(_error):
+    return page("접근 제한", '<div class="empty"><h2>접근 권한이 없습니다.</h2><a class="btn" href="/">홈으로</a></div>'), 403
+
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=os.environ.get("FLASK_DEBUG") == "1")
