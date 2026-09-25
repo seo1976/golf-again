@@ -1,25 +1,43 @@
+import base64
+import json
 import os
 import secrets
 import sqlite3
-from datetime import datetime
+import urllib.error
+import urllib.request
+from datetime import datetime, timedelta
 from functools import wraps
 
 from flask import Flask, abort, flash, redirect, render_template_string, request, session, url_for
 from werkzeug.security import check_password_hash, generate_password_hash
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "bojjimi-dev-change-this-key")
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
+app.config.update(
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE="Lax",
+    SESSION_COOKIE_SECURE=os.environ.get("SESSION_COOKIE_SECURE", "0") == "1",
+)
 DB_PATH = os.environ.get("DATABASE_PATH", os.path.join(os.path.dirname(__file__), "bojjimi.db"))
 ADMIN_EMAIL = os.environ.get("ADMIN_EMAIL", "").strip().lower()
+TOSS_CLIENT_KEY = os.environ.get("TOSS_CLIENT_KEY", "").strip()
+TOSS_SECRET_KEY = os.environ.get("TOSS_SECRET_KEY", "").strip()
+APP_ENV = os.environ.get("APP_ENV", "production").strip().lower()
+PAYMENT_MOCK_ENABLED = APP_ENV == "development" and os.environ.get("PAYMENT_MOCK_ENABLED", "0") == "1"
+TOSS_API_BASE = "https://api.tosspayments.com/v1"
 
 CATEGORIES = ["두피·헤어", "페이스", "바디", "천연오일", "세트"]
-ORDER_STATUSES = ["주문접수", "입금확인", "상품준비", "배송중", "배송완료", "취소"]
+ORDER_STATUSES = ["결제대기", "결제완료", "상품준비", "배송중", "배송완료", "취소", "환불완료"]
+PAYMENT_STATUSES = {"READY", "PAID", "FAILED", "CANCELED"}
 
 
 def db():
     con = sqlite3.connect(DB_PATH)
     con.row_factory = sqlite3.Row
     con.execute("PRAGMA foreign_keys = ON")
+    con.execute("PRAGMA busy_timeout = 5000")
     return con
 
 
@@ -50,7 +68,11 @@ def init_db():
       postcode TEXT NOT NULL DEFAULT '', address1 TEXT NOT NULL, address2 TEXT NOT NULL DEFAULT '',
       memo TEXT NOT NULL DEFAULT '', payment_method TEXT NOT NULL DEFAULT 'bank',
       subtotal INTEGER NOT NULL, shipping_fee INTEGER NOT NULL, total INTEGER NOT NULL,
-      status TEXT NOT NULL DEFAULT '주문접수', created_at TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT '결제대기', payment_status TEXT NOT NULL DEFAULT 'READY',
+      payment_provider TEXT NOT NULL DEFAULT 'toss', payment_key TEXT,
+      customer_key TEXT NOT NULL DEFAULT '', confirm_idempotency_key TEXT NOT NULL DEFAULT '',
+      paid_at TEXT, canceled_at TEXT, inventory_reserved INTEGER NOT NULL DEFAULT 0,
+      inventory_restored INTEGER NOT NULL DEFAULT 0, expires_at TEXT, created_at TEXT NOT NULL,
       FOREIGN KEY(user_id) REFERENCES users(id)
     );
     CREATE TABLE IF NOT EXISTS order_items(
@@ -59,7 +81,34 @@ def init_db():
       FOREIGN KEY(order_id) REFERENCES orders(id) ON DELETE CASCADE,
       FOREIGN KEY(product_id) REFERENCES products(id)
     );
+    CREATE TABLE IF NOT EXISTS payment_transactions(
+      id INTEGER PRIMARY KEY AUTOINCREMENT, order_id INTEGER NOT NULL,
+      kind TEXT NOT NULL, provider_status TEXT NOT NULL DEFAULT '', amount INTEGER NOT NULL DEFAULT 0,
+      payment_key TEXT NOT NULL DEFAULT '', idempotency_key TEXT NOT NULL DEFAULT '',
+      provider_response TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL,
+      FOREIGN KEY(order_id) REFERENCES orders(id) ON DELETE CASCADE
+    );
+    CREATE TABLE IF NOT EXISTS webhook_events(
+      id INTEGER PRIMARY KEY AUTOINCREMENT, transmission_id TEXT UNIQUE NOT NULL,
+      event_type TEXT NOT NULL DEFAULT '', payload TEXT NOT NULL, created_at TEXT NOT NULL
+    );
     """)
+    existing = {row[1] for row in con.execute("PRAGMA table_info(orders)").fetchall()}
+    migrations = {
+        "payment_status": "TEXT NOT NULL DEFAULT 'READY'",
+        "payment_provider": "TEXT NOT NULL DEFAULT 'toss'",
+        "payment_key": "TEXT",
+        "customer_key": "TEXT NOT NULL DEFAULT ''",
+        "confirm_idempotency_key": "TEXT NOT NULL DEFAULT ''",
+        "paid_at": "TEXT",
+        "canceled_at": "TEXT",
+        "inventory_reserved": "INTEGER NOT NULL DEFAULT 0",
+        "inventory_restored": "INTEGER NOT NULL DEFAULT 0",
+        "expires_at": "TEXT",
+    }
+    for column, definition in migrations.items():
+        if column not in existing:
+            con.execute(f"ALTER TABLE orders ADD COLUMN {column} {definition}")
     if con.execute("SELECT COUNT(*) FROM products").fetchone()[0] == 0:
         con.execute("""INSERT INTO products(
           name,category,short_desc,description,ingredients,usage,caution,price,sale_price,
@@ -78,6 +127,101 @@ def init_db():
 
 
 init_db()
+
+
+class PaymentGatewayError(Exception):
+    def __init__(self, message, code="PAYMENT_ERROR", status=502):
+        super().__init__(message)
+        self.code = code
+        self.status = status
+
+
+def toss_api(method, path, payload=None, idempotency_key=None):
+    if not TOSS_SECRET_KEY:
+        raise PaymentGatewayError("결제 시크릿 키가 등록되지 않았습니다.", "PAYMENT_KEY_MISSING", 503)
+    auth = base64.b64encode(f"{TOSS_SECRET_KEY}:".encode()).decode()
+    headers = {"Authorization": f"Basic {auth}", "Content-Type": "application/json"}
+    if idempotency_key:
+        headers["Idempotency-Key"] = idempotency_key
+    data = json.dumps(payload).encode() if payload is not None else None
+    api_request = urllib.request.Request(f"{TOSS_API_BASE}{path}", data=data, headers=headers, method=method)
+    try:
+        with urllib.request.urlopen(api_request, timeout=15) as response:
+            return json.loads(response.read().decode())
+    except urllib.error.HTTPError as error:
+        try:
+            detail = json.loads(error.read().decode())
+        except (ValueError, UnicodeDecodeError):
+            detail = {}
+        raise PaymentGatewayError(
+            detail.get("message", "결제사 요청을 처리하지 못했습니다."),
+            detail.get("code", "PAYMENT_GATEWAY_ERROR"),
+            error.code,
+        ) from error
+    except urllib.error.URLError as error:
+        raise PaymentGatewayError("결제사 연결이 지연되고 있습니다. 잠시 후 다시 시도해 주세요.") from error
+
+
+def csrf_token():
+    if "csrf_token" not in session:
+        session["csrf_token"] = secrets.token_urlsafe(32)
+    return session["csrf_token"]
+
+
+@app.before_request
+def verify_csrf():
+    if request.method == "POST" and request.endpoint != "toss_webhook":
+        supplied = request.form.get("csrf_token") or request.headers.get("X-CSRFToken")
+        if not supplied or not secrets.compare_digest(supplied, session.get("csrf_token", "")):
+            abort(400, "보안 확인에 실패했습니다. 페이지를 새로고침해 주세요.")
+
+
+def can_access_order(order):
+    if not order:
+        return False
+    user = current_user()
+    return bool(
+        (user and (user["role"] == "admin" or order["user_id"] == user["id"]))
+        or session.get("last_order_no") == order["order_no"]
+    )
+
+
+def release_inventory(con, order):
+    if not order["inventory_reserved"] or order["inventory_restored"]:
+        return
+    items = con.execute("SELECT product_id,quantity FROM order_items WHERE order_id=?", (order["id"],)).fetchall()
+    for item in items:
+        con.execute(
+            "UPDATE products SET stock=stock+?,updated_at=? WHERE id=?",
+            (item["quantity"], now(), item["product_id"]),
+        )
+    con.execute("UPDATE orders SET inventory_restored=1 WHERE id=?", (order["id"],))
+
+
+def restore_cart(order_id):
+    con = db()
+    items = con.execute("SELECT product_id,quantity FROM order_items WHERE order_id=?", (order_id,)).fetchall()
+    con.close()
+    cart = session.get("cart", {})
+    for item in items:
+        cart[str(item["product_id"])] = cart.get(str(item["product_id"]), 0) + item["quantity"]
+    session["cart"] = cart
+
+
+def cleanup_expired_orders():
+    con = db()
+    expired = con.execute(
+        "SELECT * FROM orders WHERE payment_status='READY' AND expires_at IS NOT NULL AND expires_at<?",
+        (now(),),
+    ).fetchall()
+    if expired:
+        con.execute("BEGIN IMMEDIATE")
+        for order in expired:
+            current = con.execute("SELECT * FROM orders WHERE id=?", (order["id"],)).fetchone()
+            release_inventory(con, current)
+            con.execute("UPDATE orders SET payment_status='FAILED',status='취소' WHERE id=?", (order["id"],))
+        con.commit()
+    con.close()
 
 
 def won(value):
@@ -117,6 +261,7 @@ def admin_required(fn):
 
 
 def cart_data():
+    cleanup_expired_orders()
     raw = session.get("cart", {})
     cart = {str(k): max(1, int(v)) for k, v in raw.items() if str(k).isdigit()}
     if not cart:
@@ -142,7 +287,7 @@ def cart_data():
 
 BASE = """
 <!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="description" content="RUBIE 자연유래 화장품을 만나는 보찌미 공식몰"><title>{{title}} | BOJJIMI</title>
+<meta name="description" content="RUBIE 자연유래 화장품을 만나는 보찌미 공식몰"><meta name="csrf-token" content="{{csrf_token}}"><title>{{title}} | BOJJIMI</title>
 <style>
 *{box-sizing:border-box}:root{--rose:#a44b64;--deep:#4d2934;--blush:#f8edf0;--cream:#fffaf6;--line:#eadde0;--ink:#30272a;--muted:#74686c;--white:#fff}
 html{scroll-behavior:smooth}body{margin:0;background:var(--cream);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans KR",Arial,sans-serif;line-height:1.58}a{text-decoration:none;color:inherit}button,input,select,textarea{font:inherit}
@@ -156,7 +301,7 @@ html{scroll-behavior:smooth}body{margin:0;background:var(--cream);color:var(--in
 .detail{display:grid;grid-template-columns:1fr 1fr;gap:48px}.detail .product-visual{border-radius:28px}.detail h1{font-family:Georgia,"Noto Serif KR",serif;font-size:42px}.detail-price{font-size:28px;font-weight:900}.info-table{border-top:1px solid var(--line);margin-top:24px}.info-row{display:grid;grid-template-columns:130px 1fr;padding:15px 0;border-bottom:1px solid var(--line);gap:12px}.qty{width:82px;padding:10px;border:1px solid var(--line);border-radius:10px}
 .formbox{max-width:760px;margin:auto;background:#fff;border:1px solid var(--line);border-radius:24px;padding:30px}.field{margin-bottom:16px}.field label{display:block;font-weight:800;font-size:13px;margin-bottom:7px}.field input,.field select,.field textarea{width:100%;padding:13px;border:1px solid #dbcdd1;border-radius:11px;background:#fff}.field textarea{min-height:110px;resize:vertical}.row{display:grid;grid-template-columns:1fr 1fr;gap:14px}.notice{background:var(--blush);border-left:4px solid var(--rose);padding:14px 16px;border-radius:10px;color:var(--deep)}
 .cart-row{display:grid;grid-template-columns:86px 1fr 100px 120px auto;gap:16px;align-items:center;background:#fff;border-bottom:1px solid var(--line);padding:18px}.thumb{width:86px;height:86px;border-radius:15px;background:linear-gradient(145deg,#f8e9ed,#e9d7ce);display:grid;place-items:center;color:var(--rose);font:700 12px Georgia,serif}.summary{margin-left:auto;max-width:420px;background:#fff;border:1px solid var(--line);border-radius:20px;padding:22px}.summary-line{display:flex;justify-content:space-between;padding:8px 0}.summary-line.total{border-top:1px solid var(--line);margin-top:8px;padding-top:15px;font-size:20px;font-weight:900}
-.order-card{background:#fff;border:1px solid var(--line);border-radius:18px;padding:20px;margin-bottom:14px}.order-head{display:flex;justify-content:space-between;gap:15px}.status{padding:5px 10px;background:#edf4ee;color:#4f6d57;border-radius:999px;font-size:12px;font-weight:900}table{width:100%;border-collapse:collapse;background:#fff;border-radius:16px;overflow:hidden}th,td{text-align:left;padding:12px;border-bottom:1px solid var(--line);font-size:13px}th{background:var(--blush)}.admin-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:24px}.kpi{background:#fff;border:1px solid var(--line);border-radius:18px;padding:20px}.kpi b{display:block;font-size:28px;color:var(--deep)}
+.order-card{background:#fff;border:1px solid var(--line);border-radius:18px;padding:20px;margin-bottom:14px}.order-head{display:flex;justify-content:space-between;gap:15px}.status{padding:5px 10px;background:#edf4ee;color:#4f6d57;border-radius:999px;font-size:12px;font-weight:900}.status.ready{background:#fff4db;color:#8a6516}.status.failed{background:#fff0f0;color:#a13f3f}.payment-box{background:#fff;border:1px solid var(--line);border-radius:22px;padding:24px;margin-top:18px}.checkline{display:flex;align-items:flex-start;gap:9px;margin:12px 0}.checkline input{margin-top:5px}.danger{background:#8d2f3d}.error-code{font-family:monospace;background:#f7f1f2;padding:3px 7px;border-radius:6px}table{width:100%;border-collapse:collapse;background:#fff;border-radius:16px;overflow:hidden}th,td{text-align:left;padding:12px;border-bottom:1px solid var(--line);font-size:13px}th{background:var(--blush)}.admin-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:24px}.kpi{background:#fff;border:1px solid var(--line);border-radius:18px;padding:20px}.kpi b{display:block;font-size:28px;color:var(--deep)}
 footer{background:#2e2025;color:#d9ccd0;padding:46px 22px}.footerin{max-width:1180px;margin:auto;display:flex;justify-content:space-between;gap:34px}.footer-logo{color:#fff;font:700 24px Georgia,serif;letter-spacing:3px}.small{font-size:12px}.center{text-align:center}.empty{padding:52px 20px;text-align:center;background:#fff;border:1px solid var(--line);border-radius:20px}.mobile-nav{display:none}
 @media(max-width:820px){.topin{height:64px;padding:0 15px}.nav a.hide-m{display:none}.hero{min-height:auto;grid-template-columns:1fr;padding:34px 24px;border-radius:22px}.hero h1{font-size:42px}.hero-art{max-width:360px;margin:auto;width:100%}.grid,.values{grid-template-columns:repeat(2,1fr)}.story,.detail{grid-template-columns:1fr}.page{padding:22px 14px 105px}.section{padding:40px 0}.section h2{font-size:30px}.row{grid-template-columns:1fr}.cart-row{grid-template-columns:70px 1fr auto}.cart-row .cart-price,.cart-row .cart-qty{grid-column:2}.cart-row .thumb{width:70px;height:70px}.admin-grid{grid-template-columns:repeat(2,1fr)}.footerin{display:block}table{display:block;overflow-x:auto}.mobile-nav{display:flex;position:fixed;left:12px;right:12px;bottom:10px;z-index:40;background:#fff;border:1px solid var(--line);box-shadow:0 10px 30px #301d2633;border-radius:18px;padding:9px;justify-content:space-around;font-size:12px;font-weight:800}.mobile-nav a{text-align:center}.mobile-nav span{display:block;font-size:18px}}
 @media(max-width:520px){.grid,.values{grid-template-columns:1fr}.hero h1{font-size:36px}.hero-art b{font-size:42px}.detail h1{font-size:34px}.section-head{align-items:start;flex-direction:column}.formbox{padding:22px 18px}}
@@ -164,14 +309,15 @@ footer{background:#2e2025;color:#d9ccd0;padding:46px 22px}.footerin{max-width:11
 <div class="announcement">자연에서 찾은 균형 · 정직하게 확인된 정보만 전합니다</div>
 <header class="top"><div class="topin"><a class="logo" href="{{url_for('home')}}">BOJJIMI<small>RUBIE COSMETICS</small></a><nav class="nav"><a class="hide-m" href="{{url_for('shop')}}">제품</a><a class="hide-m" href="{{url_for('brand')}}">브랜드</a>{% if user %}<a class="hide-m" href="{{url_for('mypage')}}">마이페이지</a>{% if user['role']=='admin' %}<a href="{{url_for('admin')}}">관리자</a>{% endif %}<a class="hide-m" href="{{url_for('logout')}}">로그아웃</a>{% else %}<a class="hide-m" href="{{url_for('login')}}">로그인</a>{% endif %}<a href="{{url_for('cart')}}">장바구니 <span class="cart-count">{{cart_count}}</span></a></nav></div></header>
 {% with messages=get_flashed_messages() %}{% for message in messages %}<div class="flash">{{message}}</div>{% endfor %}{% endwith %}<main class="page">{{body|safe}}</main>
-<footer><div class="footerin"><div><div class="footer-logo">BOJJIMI</div><p class="small">RUBIE의 자연유래 화장품을 소개하는 공식 온라인 스토어</p></div><div class="small">고객센터·사업자정보·통신판매업 정보는 판매 개시 전 확정해 표시하세요.<br>© 2026 BOJJIMI. All rights reserved.</div></div></footer>
-<nav class="mobile-nav"><a href="{{url_for('home')}}"><span>⌂</span>홈</a><a href="{{url_for('shop')}}"><span>◫</span>제품</a><a href="{{url_for('cart')}}"><span>🛒</span>장바구니</a><a href="{{url_for('mypage') if user else url_for('login')}}"><span>○</span>마이</a></nav></body></html>
+<footer><div class="footerin"><div><div class="footer-logo">BOJJIMI</div><p class="small">RUBIE의 자연유래 화장품을 소개하는 공식 온라인 스토어</p></div><div class="small"><a href="{{url_for('policy',kind='terms')}}">이용약관</a> · <a href="{{url_for('policy',kind='privacy')}}">개인정보처리방침</a> · <a href="{{url_for('policy',kind='returns')}}">교환·반품정책</a><br>사업자정보·통신판매업 정보는 판매 개시 전 확정해 표시하세요.<br>© 2026 BOJJIMI. All rights reserved.</div></div></footer>
+<nav class="mobile-nav"><a href="{{url_for('home')}}"><span>⌂</span>홈</a><a href="{{url_for('shop')}}"><span>◫</span>제품</a><a href="{{url_for('cart')}}"><span>🛒</span>장바구니</a><a href="{{url_for('mypage') if user else url_for('login')}}"><span>○</span>마이</a></nav>
+<script>document.querySelectorAll('form[method="post"],form[method="POST"]').forEach((form)=>{if(!form.querySelector('input[name="csrf_token"]')){const input=document.createElement('input');input.type='hidden';input.name='csrf_token';input.value=document.querySelector('meta[name="csrf-token"]').content;form.prepend(input);}});</script></body></html>
 """
 
 
 def page(title, body, **context):
     cart_count = sum(int(v) for v in session.get("cart", {}).values())
-    return render_template_string(BASE, title=title, body=body, user=current_user(), cart_count=cart_count, **context)
+    return render_template_string(BASE, title=title, body=body, user=current_user(), cart_count=cart_count, csrf_token=csrf_token(), **context)
 
 
 @app.route("/")
@@ -286,10 +432,28 @@ def checkout():
         flash("장바구니가 비어 있습니다."); return redirect(url_for("shop"))
     user = current_user()
     if request.method == "POST":
+        if request.form.get("privacy_agree") != "1" or request.form.get("purchase_agree") != "1":
+            flash("개인정보 수집과 구매조건 확인에 동의해 주세요.")
+            return redirect(url_for("checkout"))
         order_no = datetime.now().strftime("BJ%Y%m%d") + secrets.token_hex(3).upper()
+        customer_key = f"cust_{secrets.token_urlsafe(18)}"
+        confirm_key = secrets.token_hex(16)
+        expires_at = (datetime.now() + timedelta(minutes=20)).isoformat(timespec="minutes")
         con = db()
         try:
-            cur = con.execute("""INSERT INTO orders(order_no,user_id,buyer_name,email,phone,postcode,address1,address2,memo,payment_method,subtotal,shipping_fee,total,status,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", (order_no, user["id"] if user else None, request.form["buyer_name"].strip(), request.form["email"].strip().lower(), request.form["phone"].strip(), request.form.get("postcode", "").strip(), request.form["address1"].strip(), request.form.get("address2", "").strip(), request.form.get("memo", "").strip(), "bank", subtotal, shipping, total, "주문접수", now()))
+            con.execute("BEGIN IMMEDIATE")
+            cur = con.execute("""INSERT INTO orders(
+              order_no,user_id,buyer_name,email,phone,postcode,address1,address2,memo,
+              payment_method,subtotal,shipping_fee,total,status,payment_status,payment_provider,
+              customer_key,confirm_idempotency_key,inventory_reserved,inventory_restored,expires_at,created_at
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", (
+              order_no, user["id"] if user else None, request.form["buyer_name"].strip(),
+              request.form["email"].strip().lower(), request.form["phone"].strip(),
+              request.form.get("postcode", "").strip(), request.form["address1"].strip(),
+              request.form.get("address2", "").strip(), request.form.get("memo", "").strip(),
+              "미선택", subtotal, shipping, total, "결제대기", "READY", "toss",
+              customer_key, confirm_key, 1, 0, expires_at, now()
+            ))
             order_id = cur.lastrowid
             for item in items:
                 latest = con.execute("SELECT stock,status FROM products WHERE id=?", (item["product"]["id"],)).fetchone()
@@ -300,19 +464,110 @@ def checkout():
         except Exception as exc:
             con.rollback(); con.close(); flash(str(exc)); return redirect(url_for("cart"))
         con.close(); session["cart"] = {}; session["last_order_no"] = order_no
-        return redirect(url_for("order_complete", order_no=order_no))
+        return redirect(url_for("payment", order_no=order_no))
     body = render_template_string("""
-    <div class="formbox"><div class="eyebrow">CHECKOUT</div><h2>{{'회원 주문' if user else '비회원 주문'}}</h2>{% if not user %}<div class="notice">회원가입 없이도 주문할 수 있습니다. 주문번호를 꼭 보관해 주세요.</div>{% endif %}<form method="post"><div class="row"><div class="field"><label>주문자명</label><input name="buyer_name" value="{{user['name'] if user else ''}}" required></div><div class="field"><label>휴대전화</label><input name="phone" value="{{user['phone'] if user else ''}}" required></div></div><div class="field"><label>이메일</label><input type="email" name="email" value="{{user['email'] if user else ''}}" required></div><div class="row"><div class="field"><label>우편번호</label><input name="postcode"></div><div class="field"><label>배송 요청사항</label><input name="memo"></div></div><div class="field"><label>주소</label><input name="address1" required></div><div class="field"><label>상세주소</label><input name="address2"></div><div class="notice">현재 주문 접수형 결제 단계입니다. 실제 카드결제는 PG사 계약과 결제키 등록 후 활성화됩니다.</div><div class="summary-line total"><span>주문금액</span><span>{{total|won}}</span></div><button class="btn dark" style="width:100%;margin-top:16px">주문 접수하기</button></form></div>
+    <div class="formbox"><div class="eyebrow">CHECKOUT</div><h2>{{'회원 주문' if user else '비회원 주문'}}</h2>{% if not user %}<div class="notice">회원가입 없이도 주문할 수 있습니다. 결제 후 주문번호를 꼭 보관해 주세요.</div>{% endif %}<form method="post"><div class="row"><div class="field"><label>주문자명</label><input name="buyer_name" value="{{user['name'] if user else ''}}" required></div><div class="field"><label>휴대전화</label><input name="phone" value="{{user['phone'] if user else ''}}" inputmode="tel" required></div></div><div class="field"><label>이메일</label><input type="email" name="email" value="{{user['email'] if user else ''}}" required></div><div class="row"><div class="field"><label>우편번호</label><input name="postcode"></div><div class="field"><label>배송 요청사항</label><input name="memo"></div></div><div class="field"><label>주소</label><input name="address1" required></div><div class="field"><label>상세주소</label><input name="address2"></div><label class="checkline"><input type="checkbox" name="privacy_agree" value="1" required><span><a href="{{url_for('policy',kind='privacy')}}" target="_blank">개인정보 수집·이용</a>에 동의합니다. (필수)</span></label><label class="checkline"><input type="checkbox" name="purchase_agree" value="1" required><span>상품명, 가격, 배송·교환·환불 조건을 확인했으며 구매에 동의합니다. (필수)</span></label><div class="summary-line total"><span>총 결제금액</span><span>{{total|won}}</span></div><button class="btn dark" style="width:100%;margin-top:16px">결제 단계로 이동</button></form></div>
     """, user=user, total=total)
     return page("주문/결제", body)
 
 
+@app.route("/payment/<order_no>")
+def payment(order_no):
+    cleanup_expired_orders()
+    con = db()
+    order = con.execute("SELECT * FROM orders WHERE order_no=?", (order_no,)).fetchone()
+    items = con.execute("SELECT * FROM order_items WHERE order_id=?", (order["id"],)).fetchall() if order else []
+    con.close()
+    if not can_access_order(order): abort(403)
+    if order["payment_status"] == "PAID":
+        return redirect(url_for("order_complete", order_no=order_no))
+    if order["payment_status"] != "READY":
+        flash("이 주문은 결제를 다시 진행할 수 없습니다.")
+        return redirect(url_for("shop"))
+    order_name = items[0]["product_name"] if len(items) == 1 else f"{items[0]['product_name']} 외 {len(items)-1}건"
+    success_url = url_for("payment_success", _external=True)
+    fail_url = url_for("payment_fail", orderNo=order_no, _external=True)
+    configured = bool(TOSS_CLIENT_KEY and TOSS_SECRET_KEY)
+    body = render_template_string("""
+    <div class="formbox"><div class="eyebrow">SECURE PAYMENT</div><h2>안전결제</h2><div class="summary-line"><span>주문번호</span><b>{{o['order_no']}}</b></div><div class="summary-line total"><span>총 결제금액</span><span>{{o['total']|won}}</span></div>
+    {% if configured %}<div id="payment-method" class="payment-box"></div><div id="agreement"></div><button id="payment-button" class="btn dark" style="width:100%;margin-top:16px" disabled>결제하기</button><p id="payment-message" class="muted small">안전결제 화면을 불러오는 중입니다.</p>
+    <script src="https://js.tosspayments.com/v2/standard"></script><script>
+    (async()=>{const button=document.getElementById('payment-button');const message=document.getElementById('payment-message');try{const tossPayments=TossPayments({{client_key|tojson}});const widgets=tossPayments.widgets({customerKey:{{o['customer_key']|tojson}}});await widgets.setAmount({currency:'KRW',value:{{o['total']}}});await Promise.all([widgets.renderPaymentMethods({selector:'#payment-method',variantKey:'DEFAULT'}),widgets.renderAgreement({selector:'#agreement',variantKey:'AGREEMENT'})]);button.disabled=false;message.textContent='카드·계좌이체·간편결제 중 원하는 방법을 선택하세요.';button.addEventListener('click',async()=>{button.disabled=true;try{await widgets.requestPayment({orderId:{{o['order_no']|tojson}},orderName:{{order_name|tojson}},successUrl:{{success_url|tojson}},failUrl:{{fail_url|tojson}},customerEmail:{{o['email']|tojson}},customerName:{{o['buyer_name']|tojson}},customerMobilePhone:{{o['phone']|replace('-', '')|tojson}}});}catch(error){button.disabled=false;message.textContent=error.message||'결제창을 열지 못했습니다.';}});}catch(error){message.textContent='결제 화면을 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.';}})();
+    </script>{% elif mock_enabled %}<div class="notice">개발용 모의결제 모드입니다. 실제 금액은 승인되지 않습니다.</div><form method="post" action="{{url_for('mock_payment',order_no=o['order_no'])}}"><button class="btn dark" style="width:100%;margin-top:16px">모의결제 완료</button></form>{% else %}<div class="notice">결제사 연동키 등록을 기다리고 있습니다. 현재 실제 결제는 진행되지 않습니다.</div>{% endif %}</div>
+    """, o=order, configured=configured, mock_enabled=PAYMENT_MOCK_ENABLED, client_key=TOSS_CLIENT_KEY, order_name=order_name, success_url=success_url, fail_url=fail_url)
+    return page("안전결제", body)
+
+
+@app.get("/payments/toss/success")
+def payment_success():
+    payment_key = request.args.get("paymentKey", "")
+    order_no = request.args.get("orderId", "")
+    try:
+        requested_amount = int(request.args.get("amount", "0"))
+    except ValueError:
+        abort(400)
+    con = db()
+    order = con.execute("SELECT * FROM orders WHERE order_no=?", (order_no,)).fetchone()
+    con.close()
+    if not can_access_order(order): abort(403)
+    if order["payment_status"] == "PAID":
+        return redirect(url_for("order_complete", order_no=order_no))
+    if order["payment_status"] != "READY" or requested_amount != order["total"]:
+        return page("결제 실패", '<div class="empty"><h2>결제 금액 검증에 실패했습니다.</h2><p>결제는 승인되지 않았습니다.</p></div>'), 400
+    try:
+        result = toss_api("POST", "/payments/confirm", {
+            "paymentKey": payment_key, "orderId": order_no, "amount": order["total"]
+        }, order["confirm_idempotency_key"])
+        if result.get("orderId") != order_no or int(result.get("totalAmount", -1)) != order["total"] or result.get("status") != "DONE":
+            raise PaymentGatewayError("결제 승인 응답을 검증하지 못했습니다.")
+    except PaymentGatewayError as error:
+        body = render_template_string("""<div class="empty"><h2>결제를 완료하지 못했습니다.</h2><p>{{message}}</p><p class="small">오류코드 <span class="error-code">{{code}}</span></p><a class="btn" href="{{url_for('payment',order_no=order_no)}}">다시 결제하기</a></div>""", message=str(error), code=error.code, order_no=order_no)
+        return page("결제 실패", body), error.status
+    con = db()
+    con.execute("BEGIN IMMEDIATE")
+    current = con.execute("SELECT * FROM orders WHERE id=?", (order["id"],)).fetchone()
+    if current["payment_status"] != "PAID":
+        con.execute("""UPDATE orders SET payment_status='PAID',status='결제완료',payment_key=?,payment_method=?,paid_at=? WHERE id=?""", (payment_key, result.get("method", ""), now(), order["id"]))
+        con.execute("""INSERT INTO payment_transactions(order_id,kind,provider_status,amount,payment_key,idempotency_key,provider_response,created_at) VALUES(?,?,?,?,?,?,?,?)""", (order["id"], "CONFIRM", result.get("status", ""), order["total"], payment_key, order["confirm_idempotency_key"], json.dumps(result, ensure_ascii=False), now()))
+    con.commit(); con.close()
+    session["last_order_no"] = order_no
+    return redirect(url_for("order_complete", order_no=order_no))
+
+
+@app.get("/payments/toss/fail")
+def payment_fail():
+    order_no = request.args.get("orderNo") or request.args.get("orderId", "")
+    code = request.args.get("code", "PAYMENT_CANCELED")
+    message = request.args.get("message", "결제가 취소되었거나 완료되지 않았습니다.")
+    con = db(); order = con.execute("SELECT * FROM orders WHERE order_no=?", (order_no,)).fetchone()
+    if order and can_access_order(order) and order["payment_status"] == "READY":
+        con.execute("BEGIN IMMEDIATE"); order = con.execute("SELECT * FROM orders WHERE id=?", (order["id"],)).fetchone(); release_inventory(con, order)
+        con.execute("UPDATE orders SET payment_status='FAILED',status='취소' WHERE id=?", (order["id"],)); con.commit(); restore_cart(order["id"])
+    con.close()
+    body = render_template_string("""<div class="empty"><h2>결제가 완료되지 않았습니다.</h2><p>{{message}}</p><p class="small">오류코드 <span class="error-code">{{code}}</span></p><a class="btn" href="{{url_for('cart')}}">장바구니로 돌아가기</a></div>""", message=message, code=code)
+    return page("결제 실패", body)
+
+
+@app.post("/payments/mock/<order_no>")
+def mock_payment(order_no):
+    if not PAYMENT_MOCK_ENABLED: abort(404)
+    con = db(); order = con.execute("SELECT * FROM orders WHERE order_no=?", (order_no,)).fetchone()
+    if not can_access_order(order): con.close(); abort(403)
+    if order["payment_status"] == "READY":
+        payment_key = f"mock_{secrets.token_hex(12)}"
+        result = {"status": "DONE", "orderId": order_no, "totalAmount": order["total"], "method": "모의결제"}
+        con.execute("UPDATE orders SET payment_status='PAID',status='결제완료',payment_key=?,payment_method='모의결제',paid_at=? WHERE id=?", (payment_key, now(), order["id"]))
+        con.execute("INSERT INTO payment_transactions(order_id,kind,provider_status,amount,payment_key,idempotency_key,provider_response,created_at) VALUES(?,?,?,?,?,?,?,?)", (order["id"], "MOCK_CONFIRM", "DONE", order["total"], payment_key, order["confirm_idempotency_key"], json.dumps(result, ensure_ascii=False), now()))
+        con.commit()
+    con.close(); return redirect(url_for("order_complete", order_no=order_no))
+
+
 @app.route("/order/complete/<order_no>")
 def order_complete(order_no):
-    if session.get("last_order_no") != order_no and not session.get("user_id"): abort(403)
     con = db(); order = con.execute("SELECT * FROM orders WHERE order_no=?", (order_no,)).fetchone(); con.close()
-    if not order: abort(404)
-    body = render_template_string("""<div class="formbox center"><div class="eyebrow">ORDER COMPLETE</div><h2>주문이 접수되었습니다.</h2><p>주문번호</p><p style="font-size:26px;font-weight:900;color:var(--rose)">{{o['order_no']}}</p><p class="muted">결제 및 배송 안내는 입력하신 연락처로 전달됩니다.</p><div class="summary-line total"><span>주문금액</span><span>{{o['total']|won}}</span></div><a class="btn dark" href="{{url_for('mypage') if user else url_for('home')}}">{{'주문내역 보기' if user else '홈으로'}}</a></div>""", o=order, user=current_user())
+    if not can_access_order(order): abort(403)
+    if order["payment_status"] != "PAID": return redirect(url_for("payment", order_no=order_no))
+    body = render_template_string("""<div class="formbox center"><div class="eyebrow">PAYMENT COMPLETE</div><h2>결제가 완료되었습니다.</h2><p>주문번호</p><p style="font-size:26px;font-weight:900;color:var(--rose)">{{o['order_no']}}</p><p class="muted">주문과 배송 진행상황을 입력하신 연락처로 안내합니다.</p><div class="summary-line"><span>결제수단</span><b>{{o['payment_method']}}</b></div><div class="summary-line total"><span>결제금액</span><span>{{o['total']|won}}</span></div><a class="btn dark" href="{{url_for('mypage') if user else url_for('home')}}">{{'주문내역 보기' if user else '홈으로'}}</a></div>""", o=order, user=current_user())
     return page("주문 완료", body)
 
 
@@ -320,7 +575,7 @@ def order_complete(order_no):
 @login_required
 def mypage():
     user = current_user(); con = db(); orders = con.execute("SELECT * FROM orders WHERE user_id=? ORDER BY id DESC", (user["id"],)).fetchall(); con.close()
-    body = render_template_string("""<section class="section" style="padding-top:12px"><div class="eyebrow">MY BOJJIMI</div><h2>{{user['name']}}님의 주문</h2>{% if orders %}{% for o in orders %}<a class="order-card" style="display:block" href="{{url_for('member_order',order_no=o['order_no'])}}"><div class="order-head"><div><b>{{o['order_no']}}</b><div class="muted small">{{o['created_at']}}</div></div><span class="status">{{o['status']}}</span></div><div class="summary-line"><span>결제금액</span><b>{{o['total']|won}}</b></div></a>{% endfor %}{% else %}<div class="empty"><p>아직 주문내역이 없습니다.</p><a class="btn" href="{{url_for('shop')}}">제품 둘러보기</a></div>{% endif %}</section>""", user=user, orders=orders)
+    body = render_template_string("""<section class="section" style="padding-top:12px"><div class="eyebrow">MY BOJJIMI</div><h2>{{user['name']}}님의 주문</h2>{% if orders %}{% for o in orders %}<a class="order-card" style="display:block" href="{{url_for('member_order',order_no=o['order_no'])}}"><div class="order-head"><div><b>{{o['order_no']}}</b><div class="muted small">{{o['created_at']}}</div></div><span class="status {{'ready' if o['payment_status']=='READY' else 'failed' if o['payment_status'] in ['FAILED','CANCELED'] else ''}}">{{o['status']}}</span></div><div class="summary-line"><span>{{'결제금액' if o['payment_status']=='PAID' else '주문금액'}}</span><b>{{o['total']|won}}</b></div></a>{% endfor %}{% else %}<div class="empty"><p>아직 주문내역이 없습니다.</p><a class="btn" href="{{url_for('shop')}}">제품 둘러보기</a></div>{% endif %}</section>""", user=user, orders=orders)
     return page("마이페이지", body)
 
 
@@ -330,7 +585,7 @@ def member_order(order_no):
     user = current_user(); con = db(); order = con.execute("SELECT * FROM orders WHERE order_no=? AND user_id=?", (order_no, user["id"])).fetchone()
     if not order: con.close(); abort(404)
     items = con.execute("SELECT * FROM order_items WHERE order_id=?", (order["id"],)).fetchall(); con.close()
-    body = render_template_string("""<div class="formbox"><div class="order-head"><div><div class="eyebrow">ORDER DETAIL</div><h2>{{o['order_no']}}</h2></div><span class="status">{{o['status']}}</span></div>{% for item in items %}<div class="summary-line"><span>{{item['product_name']}} × {{item['quantity']}}</span><b>{{(item['unit_price']*item['quantity'])|won}}</b></div>{% endfor %}<div class="summary-line total"><span>총 결제금액</span><span>{{o['total']|won}}</span></div><p class="muted small">배송지: {{o['address1']}} {{o['address2']}}</p></div>""", o=order, items=items)
+    body = render_template_string("""<div class="formbox"><div class="order-head"><div><div class="eyebrow">ORDER DETAIL</div><h2>{{o['order_no']}}</h2></div><span class="status">{{o['status']}}</span></div>{% for item in items %}<div class="summary-line"><span>{{item['product_name']}} × {{item['quantity']}}</span><b>{{(item['unit_price']*item['quantity'])|won}}</b></div>{% endfor %}<div class="summary-line total"><span>{{'총 결제금액' if o['payment_status']=='PAID' else '주문금액'}}</span><span>{{o['total']|won}}</span></div><div class="summary-line"><span>결제상태</span><b>{{o['payment_status']}}</b></div>{% if o['payment_status']=='READY' %}<a class="btn dark" style="width:100%;margin-top:14px" href="{{url_for('payment',order_no=o['order_no'])}}">결제 계속하기</a>{% endif %}<p class="muted small">배송지: {{o['address1']}} {{o['address2']}}</p></div>""", o=order, items=items)
     return page("주문 상세", body)
 
 
@@ -338,10 +593,10 @@ def member_order(order_no):
 @admin_required
 def admin():
     con = db()
-    stats = {"products": con.execute("SELECT COUNT(*) FROM products").fetchone()[0], "active": con.execute("SELECT COUNT(*) FROM products WHERE status='active'").fetchone()[0], "orders": con.execute("SELECT COUNT(*) FROM orders").fetchone()[0], "sales": con.execute("SELECT COALESCE(SUM(total),0) FROM orders WHERE status!='취소'").fetchone()[0]}
+    stats = {"products": con.execute("SELECT COUNT(*) FROM products").fetchone()[0], "active": con.execute("SELECT COUNT(*) FROM products WHERE status='active'").fetchone()[0], "orders": con.execute("SELECT COUNT(*) FROM orders").fetchone()[0], "sales": con.execute("SELECT COALESCE(SUM(total),0) FROM orders WHERE payment_status='PAID'").fetchone()[0]}
     products = con.execute("SELECT * FROM products ORDER BY id DESC").fetchall(); orders = con.execute("SELECT * FROM orders ORDER BY id DESC LIMIT 30").fetchall(); con.close()
     body = render_template_string("""
-    <section class="section" style="padding-top:12px"><div class="eyebrow">STORE ADMIN</div><h2>보찌미 관리자</h2><div class="admin-grid"><div class="kpi">전체 제품<b>{{s.products}}</b></div><div class="kpi">판매 중<b>{{s.active}}</b></div><div class="kpi">전체 주문<b>{{s.orders}}</b></div><div class="kpi">주문 합계<b style="font-size:20px">{{s.sales|won}}</b></div></div><div class="section-head"><h3>제품 관리</h3><a class="btn small" href="{{url_for('admin_product_new')}}">제품 추가</a></div><table><tr><th>ID</th><th>제품명</th><th>상태</th><th>가격</th><th>재고</th><th></th></tr>{% for p in products %}<tr><td>{{p['id']}}</td><td>{{p['name']}}</td><td>{{p['status']}}</td><td>{{p['price']|won}}</td><td>{{p['stock']}}</td><td><a href="{{url_for('admin_product_edit',product_id=p['id'])}}">수정</a></td></tr>{% endfor %}</table></section><section class="section"><h3>최근 주문</h3><table><tr><th>주문번호</th><th>주문자</th><th>금액</th><th>상태</th><th></th></tr>{% for o in orders %}<tr><td>{{o['order_no']}}</td><td>{{o['buyer_name']}}</td><td>{{o['total']|won}}</td><td>{{o['status']}}</td><td><a href="{{url_for('admin_order_edit',order_id=o['id'])}}">처리</a></td></tr>{% endfor %}</table></section>
+    <section class="section" style="padding-top:12px"><div class="eyebrow">STORE ADMIN</div><h2>보찌미 관리자</h2><div class="admin-grid"><div class="kpi">전체 제품<b>{{s.products}}</b></div><div class="kpi">판매 중<b>{{s.active}}</b></div><div class="kpi">전체 주문<b>{{s.orders}}</b></div><div class="kpi">실결제 매출<b style="font-size:20px">{{s.sales|won}}</b></div></div><div class="section-head"><h3>제품 관리</h3><a class="btn small" href="{{url_for('admin_product_new')}}">제품 추가</a></div><table><tr><th>ID</th><th>제품명</th><th>상태</th><th>가격</th><th>재고</th><th></th></tr>{% for p in products %}<tr><td>{{p['id']}}</td><td>{{p['name']}}</td><td>{{p['status']}}</td><td>{{p['price']|won}}</td><td>{{p['stock']}}</td><td><a href="{{url_for('admin_product_edit',product_id=p['id'])}}">수정</a></td></tr>{% endfor %}</table></section><section class="section"><h3>최근 주문</h3><table><tr><th>주문번호</th><th>주문자</th><th>금액</th><th>결제</th><th>주문상태</th><th></th></tr>{% for o in orders %}<tr><td>{{o['order_no']}}</td><td>{{o['buyer_name']}}</td><td>{{o['total']|won}}</td><td>{{o['payment_status']}}</td><td>{{o['status']}}</td><td><a href="{{url_for('admin_order_edit',order_id=o['id'])}}">처리</a></td></tr>{% endfor %}</table></section>
     """, s=type("Stats", (), stats), products=products, orders=orders)
     return page("관리자", body)
 
@@ -383,10 +638,84 @@ def admin_order_edit(order_id):
     if request.method == "POST":
         status = request.form["status"]
         if status not in ORDER_STATUSES: abort(400)
+        if status in {"결제완료", "상품준비", "배송중", "배송완료"} and order["payment_status"] != "PAID":
+            con.close(); flash("실제 결제 승인 전에는 배송 단계로 변경할 수 없습니다."); return redirect(url_for("admin_order_edit", order_id=order_id))
+        if status in {"취소", "환불완료"}:
+            con.close(); flash("결제 취소·환불 버튼을 사용해 주세요."); return redirect(url_for("admin_order_edit", order_id=order_id))
         con.execute("UPDATE orders SET status=? WHERE id=?", (status, order_id)); con.commit(); con.close(); flash("주문상태가 변경되었습니다."); return redirect(url_for("admin"))
     items = con.execute("SELECT * FROM order_items WHERE order_id=?", (order_id,)).fetchall(); con.close()
-    body = render_template_string("""<div class="formbox"><div class="eyebrow">ORDER ADMIN</div><h2>{{o['order_no']}}</h2><p>{{o['buyer_name']}} · {{o['phone']}} · {{o['email']}}</p><p class="muted">{{o['address1']}} {{o['address2']}}</p>{% for item in items %}<div class="summary-line"><span>{{item['product_name']}} × {{item['quantity']}}</span><b>{{(item['unit_price']*item['quantity'])|won}}</b></div>{% endfor %}<div class="summary-line total"><span>합계</span><span>{{o['total']|won}}</span></div><form method="post"><div class="field"><label>주문상태</label><select name="status">{% for status in statuses %}<option {{'selected' if status==o['status'] else ''}}>{{status}}</option>{% endfor %}</select></div><button class="btn dark">상태 저장</button></form></div>""", o=order, items=items, statuses=ORDER_STATUSES)
+    body = render_template_string("""<div class="formbox"><div class="eyebrow">ORDER ADMIN</div><h2>{{o['order_no']}}</h2><p>{{o['buyer_name']}} · {{o['phone']}} · {{o['email']}}</p><p class="muted">{{o['address1']}} {{o['address2']}}</p>{% for item in items %}<div class="summary-line"><span>{{item['product_name']}} × {{item['quantity']}}</span><b>{{(item['unit_price']*item['quantity'])|won}}</b></div>{% endfor %}<div class="summary-line total"><span>합계</span><span>{{o['total']|won}}</span></div><div class="summary-line"><span>결제상태</span><b>{{o['payment_status']}}</b></div><div class="summary-line"><span>결제수단</span><b>{{o['payment_method']}}</b></div><form method="post"><div class="field"><label>배송·주문상태</label><select name="status">{% for status in statuses %}<option {{'selected' if status==o['status'] else ''}}>{{status}}</option>{% endfor %}</select></div><button class="btn dark">상태 저장</button></form>{% if o['payment_status'] in ['READY','PAID'] %}<form method="post" action="{{url_for('admin_order_cancel',order_id=o['id'])}}" onsubmit="return confirm('이 주문을 취소하고 결제금액을 환불할까요?')"><div class="field" style="margin-top:24px"><label>취소·환불 사유</label><input name="cancel_reason" value="고객 요청" required></div><button class="btn danger">{{'결제 전 주문 취소' if o['payment_status']=='READY' else '전액 환불하기'}}</button></form>{% endif %}</div>""", o=order, items=items, statuses=ORDER_STATUSES)
     return page("주문 처리", body)
+
+
+@app.post("/admin/order/<int:order_id>/cancel")
+@admin_required
+def admin_order_cancel(order_id):
+    con = db(); order = con.execute("SELECT * FROM orders WHERE id=?", (order_id,)).fetchone()
+    if not order: con.close(); abort(404)
+    reason = request.form.get("cancel_reason", "고객 요청").strip()[:200] or "고객 요청"
+    if order["payment_status"] == "PAID":
+        if not order["payment_key"]: con.close(); abort(409, "결제키가 없어 자동 환불할 수 없습니다.")
+        cancel_key = secrets.token_hex(16)
+        try:
+            result = toss_api("POST", f"/payments/{order['payment_key']}/cancel", {"cancelReason": reason}, cancel_key)
+        except PaymentGatewayError as error:
+            con.close(); flash(f"환불 실패: {error} ({error.code})"); return redirect(url_for("admin_order_edit", order_id=order_id))
+        con.execute("BEGIN IMMEDIATE"); current = con.execute("SELECT * FROM orders WHERE id=?", (order_id,)).fetchone(); release_inventory(con, current)
+        con.execute("UPDATE orders SET payment_status='CANCELED',status='환불완료',canceled_at=? WHERE id=?", (now(), order_id))
+        con.execute("INSERT INTO payment_transactions(order_id,kind,provider_status,amount,payment_key,idempotency_key,provider_response,created_at) VALUES(?,?,?,?,?,?,?,?)", (order_id, "CANCEL", result.get("status", "CANCELED"), order["total"], order["payment_key"], cancel_key, json.dumps(result, ensure_ascii=False), now()))
+        con.commit(); con.close(); flash("결제가 전액 환불되고 재고가 복원되었습니다.")
+    elif order["payment_status"] == "READY":
+        con.execute("BEGIN IMMEDIATE"); current = con.execute("SELECT * FROM orders WHERE id=?", (order_id,)).fetchone(); release_inventory(con, current)
+        con.execute("UPDATE orders SET payment_status='CANCELED',status='취소',canceled_at=? WHERE id=?", (now(), order_id)); con.commit(); con.close(); flash("결제 전 주문을 취소하고 재고를 복원했습니다.")
+    else:
+        con.close(); flash("이미 취소되었거나 환불할 수 없는 주문입니다.")
+    return redirect(url_for("admin_order_edit", order_id=order_id))
+
+
+@app.post("/payments/toss/webhook")
+def toss_webhook():
+    payload = request.get_json(silent=True) or {}
+    transmission_id = request.headers.get("tosspayments-webhook-transmission-id") or f"legacy-{secrets.token_hex(16)}"
+    event_type = payload.get("eventType", "")
+    data = payload.get("data") if isinstance(payload.get("data"), dict) else payload
+    payment_key = data.get("paymentKey", "") if isinstance(data, dict) else ""
+    if not payment_key:
+        return {"ok": True}, 200
+    con = db()
+    try:
+        con.execute("INSERT INTO webhook_events(transmission_id,event_type,payload,created_at) VALUES(?,?,?,?)", (transmission_id, event_type, json.dumps(payload, ensure_ascii=False), now()))
+        con.commit()
+    except sqlite3.IntegrityError:
+        con.close(); return {"ok": True}, 200
+    try:
+        verified = toss_api("GET", f"/payments/{payment_key}")
+    except PaymentGatewayError:
+        con.execute("DELETE FROM webhook_events WHERE transmission_id=?", (transmission_id,)); con.commit(); con.close()
+        return {"ok": False}, 503
+    order_no = verified.get("orderId", "")
+    order = con.execute("SELECT * FROM orders WHERE order_no=?", (order_no,)).fetchone()
+    if not order or int(verified.get("totalAmount", -1)) != order["total"] or (order["payment_key"] and order["payment_key"] != payment_key):
+        con.close(); return {"ok": False}, 400
+    status = verified.get("status", "")
+    if status == "DONE" and order["payment_status"] == "READY":
+        con.execute("UPDATE orders SET payment_status='PAID',status='결제완료',payment_key=?,payment_method=?,paid_at=? WHERE id=?", (payment_key, verified.get("method", ""), now(), order["id"]))
+    elif status in {"CANCELED", "PARTIAL_CANCELED"} and status == "CANCELED" and order["payment_status"] != "CANCELED":
+        con.execute("BEGIN IMMEDIATE"); order = con.execute("SELECT * FROM orders WHERE id=?", (order["id"],)).fetchone(); release_inventory(con, order)
+        con.execute("UPDATE orders SET payment_status='CANCELED',status='환불완료',canceled_at=? WHERE id=?", (now(), order["id"]))
+    con.commit(); con.close(); return {"ok": True}, 200
+
+
+@app.get("/policy/<kind>")
+def policy(kind):
+    policies = {
+        "terms": ("이용약관", "상품 주문·결제·배송·취소와 회원 서비스 이용 기준을 안내하는 약관입니다. 사업자 정보와 실제 운영정책 확정 후 최종 문안으로 교체해야 합니다."),
+        "privacy": ("개인정보처리방침", "주문 처리와 배송, 고객 문의를 위해 이름·연락처·이메일·배송주소를 수집합니다. 법정 보관기간 및 실제 수탁업체 확정 후 세부 항목을 고지해야 합니다."),
+        "returns": ("교환·반품정책", "상품 수령 후 관련 법령과 고지된 조건에 따라 교환·반품을 신청할 수 있습니다. 개봉·사용한 화장품의 제한 기준과 반품 주소·배송비는 판매 개시 전 확정해 표시해야 합니다."),
+    }
+    if kind not in policies: abort(404)
+    title, content = policies[kind]
+    return page(title, render_template_string("""<div class="formbox"><div class="eyebrow">SHOP POLICY</div><h2>{{title}}</h2><p>{{content}}</p><div class="notice">현재는 판매 준비용 문안입니다. 사업자정보와 운영정책 확정 전에는 판매를 시작하지 마세요.</div></div>""", title=title, content=content))
 
 
 @app.errorhandler(404)
