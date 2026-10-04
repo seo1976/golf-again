@@ -20,8 +20,13 @@ class PaymentFlowTests(unittest.TestCase):
         con = store.db()
         con.executescript("DELETE FROM payment_transactions; DELETE FROM order_items; DELETE FROM orders; DELETE FROM products; DELETE FROM users;")
         con.execute(
-            """INSERT INTO products(name,category,price,stock,status,created_at,updated_at)
-               VALUES('RUBIE 테스트 오일','천연오일',30000,10,'active',?,?)""",
+            """INSERT INTO products(
+               name,category,description,ingredients,usage,caution,price,stock,status,
+               volume,manufacturer,responsible_seller,country_of_origin,expiry_info,quality_standard,
+               created_at,updated_at)
+               VALUES('RUBIE 테스트 오일','천연오일','테스트 제품','정제수','적당량 사용',
+               '이상 시 사용 중지',30000,10,'active','30mL','테스트 제조사','테스트 책임판매업자',
+               '대한민국','제조일로부터 30개월','소비자분쟁해결기준에 따름',?,?)""",
             (store.now(), store.now()),
         )
         con.commit()
@@ -48,6 +53,7 @@ class PaymentFlowTests(unittest.TestCase):
                 "address2": "101호",
                 "memo": "문 앞",
                 "privacy_agree": "1",
+                "terms_agree": "1",
                 "purchase_agree": "1",
             },
         )
@@ -129,6 +135,39 @@ class PaymentFlowTests(unittest.TestCase):
     def test_post_without_csrf_is_blocked(self):
         response = self.client.post(f"/cart/add/{self.product_id}", data={"quantity": "1"})
         self.assertEqual(response.status_code, 400)
+
+    def test_guest_can_lookup_order_with_order_number_and_email(self):
+        order_no = self.create_ready_order()
+        response = self.post("/order/lookup", {"order_no": order_no, "email": "buyer@example.com"})
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(order_no.encode(), response.data)
+        self.assertIn("RUBIE".encode(), response.data)
+
+    def test_incomplete_product_cannot_be_activated(self):
+        con = store.db()
+        cur = con.execute(
+            "INSERT INTO users(email,password_hash,name,phone,role,created_at) VALUES(?,?,?,?,?,?)",
+            ("admin@example.com", "unused", "관리자", "01000000000", "admin", store.now()),
+        )
+        admin_id = cur.lastrowid
+        cur = con.execute(
+            "INSERT INTO products(name,category,status,created_at,updated_at) VALUES(?,?,?,?,?)",
+            ("미완성 제품", "두피·헤어", "coming", store.now(), store.now()),
+        )
+        incomplete_id = cur.lastrowid
+        con.commit(); con.close()
+        with self.client.session_transaction() as session:
+            session["user_id"] = admin_id
+        response = self.post(
+            f"/admin/product/{incomplete_id}",
+            {"name": "미완성 제품", "category": "두피·헤어", "status": "active", "price": "0", "stock": "0"},
+        )
+        self.assertEqual(response.status_code, 200)
+        con = store.db()
+        status = con.execute("SELECT status FROM products WHERE id=?", (incomplete_id,)).fetchone()[0]
+        con.close()
+        self.assertEqual(status, "coming")
+        self.assertIn("판매 중 전환 전 입력 필요".encode(), response.data)
 
 
 if __name__ == "__main__":

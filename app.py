@@ -1,6 +1,7 @@
 import base64
 import json
 import os
+import re
 import secrets
 import sqlite3
 import urllib.error
@@ -28,9 +29,35 @@ APP_ENV = os.environ.get("APP_ENV", "production").strip().lower()
 PAYMENT_MOCK_ENABLED = APP_ENV == "development" and os.environ.get("PAYMENT_MOCK_ENABLED", "0") == "1"
 TOSS_API_BASE = "https://api.tosspayments.com/v1"
 
+STORE_INFO = {
+    "business_name": os.environ.get("BUSINESS_NAME", "").strip(),
+    "representative_name": os.environ.get("REPRESENTATIVE_NAME", "").strip(),
+    "business_number": os.environ.get("BUSINESS_NUMBER", "").strip(),
+    "ecommerce_number": os.environ.get("ECOMMERCE_NUMBER", "").strip(),
+    "business_address": os.environ.get("BUSINESS_ADDRESS", "").strip(),
+    "customer_service_phone": os.environ.get("CUSTOMER_SERVICE_PHONE", "").strip(),
+    "customer_service_email": os.environ.get("CUSTOMER_SERVICE_EMAIL", "").strip(),
+    "return_address": os.environ.get("RETURN_ADDRESS", "").strip(),
+    "privacy_officer": os.environ.get("PRIVACY_OFFICER", "").strip(),
+}
+
 CATEGORIES = ["두피·헤어", "페이스", "바디", "천연오일", "세트"]
 ORDER_STATUSES = ["결제대기", "결제완료", "상품준비", "배송중", "배송완료", "취소", "환불완료"]
 PAYMENT_STATUSES = {"READY", "PAID", "FAILED", "CANCELED"}
+PRODUCT_REQUIRED_FIELDS = {
+    "name": "제품명", "description": "상세 설명", "ingredients": "전성분",
+    "usage": "사용방법", "caution": "사용 시 주의사항", "volume": "용량",
+    "manufacturer": "제조업자", "responsible_seller": "화장품책임판매업자",
+    "country_of_origin": "제조국", "expiry_info": "사용기한",
+    "quality_standard": "품질보증기준",
+}
+STORE_REQUIRED_FIELDS = {
+    "business_name": "상호", "representative_name": "대표자명",
+    "business_number": "사업자등록번호", "ecommerce_number": "통신판매업 신고번호",
+    "business_address": "사업장 주소", "customer_service_phone": "고객센터 전화번호",
+    "customer_service_email": "고객센터 이메일", "return_address": "반품 주소",
+    "privacy_officer": "개인정보 보호책임자",
+}
 
 
 def db():
@@ -43,6 +70,39 @@ def db():
 
 def now():
     return datetime.now().isoformat(timespec="minutes")
+
+
+def store_missing_fields(include_payment=True):
+    missing = [label for key, label in STORE_REQUIRED_FIELDS.items() if not STORE_INFO.get(key)]
+    if APP_ENV == "production" and app.secret_key == "bojjimi-dev-change-this-key":
+        missing.append("운영용 SECRET_KEY")
+    if include_payment and not (TOSS_CLIENT_KEY and TOSS_SECRET_KEY):
+        missing.append("토스페이먼츠 연동키")
+    return missing
+
+
+def product_missing_fields(product):
+    def value(key, default=""):
+        try:
+            result = product[key]
+        except (KeyError, TypeError, IndexError):
+            result = default
+        return result
+    missing = [label for key, label in PRODUCT_REQUIRED_FIELDS.items() if not str(value(key)).strip()]
+    price = value("sale_price") if value("sale_price") not in (None, "") else value("price", 0)
+    if int(price or 0) <= 0:
+        missing.append("판매가격")
+    if int(value("stock", 0) or 0) <= 0:
+        missing.append("재고")
+    return missing
+
+
+def valid_phone(value):
+    return bool(re.fullmatch(r"[0-9+()\- ]{8,20}", value or ""))
+
+
+def is_product_sellable(product):
+    return product and product["status"] == "active" and not product_missing_fields(product)
 
 
 def init_db():
@@ -60,7 +120,11 @@ def init_db():
       caution TEXT NOT NULL DEFAULT '', price INTEGER NOT NULL DEFAULT 0,
       sale_price INTEGER, stock INTEGER NOT NULL DEFAULT 0, image_url TEXT NOT NULL DEFAULT '',
       badge TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'draft',
-      featured INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+      featured INTEGER NOT NULL DEFAULT 0, volume TEXT NOT NULL DEFAULT '',
+      manufacturer TEXT NOT NULL DEFAULT '', responsible_seller TEXT NOT NULL DEFAULT '',
+      country_of_origin TEXT NOT NULL DEFAULT '', expiry_info TEXT NOT NULL DEFAULT '',
+      functional_info TEXT NOT NULL DEFAULT '', quality_standard TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL, updated_at TEXT NOT NULL
     );
     CREATE TABLE IF NOT EXISTS orders(
       id INTEGER PRIMARY KEY AUTOINCREMENT, order_no TEXT UNIQUE NOT NULL, user_id INTEGER,
@@ -72,7 +136,9 @@ def init_db():
       payment_provider TEXT NOT NULL DEFAULT 'toss', payment_key TEXT,
       customer_key TEXT NOT NULL DEFAULT '', confirm_idempotency_key TEXT NOT NULL DEFAULT '',
       paid_at TEXT, canceled_at TEXT, inventory_reserved INTEGER NOT NULL DEFAULT 0,
-      inventory_restored INTEGER NOT NULL DEFAULT 0, expires_at TEXT, created_at TEXT NOT NULL,
+      inventory_restored INTEGER NOT NULL DEFAULT 0, expires_at TEXT,
+      courier TEXT NOT NULL DEFAULT '', tracking_no TEXT NOT NULL DEFAULT '', shipped_at TEXT,
+      terms_agreed_at TEXT, privacy_agreed_at TEXT, created_at TEXT NOT NULL,
       FOREIGN KEY(user_id) REFERENCES users(id)
     );
     CREATE TABLE IF NOT EXISTS order_items(
@@ -108,6 +174,30 @@ def init_db():
     }
     for column, definition in migrations.items():
         if column not in existing:
+            con.execute(f"ALTER TABLE orders ADD COLUMN {column} {definition}")
+    product_existing = {row[1] for row in con.execute("PRAGMA table_info(products)").fetchall()}
+    product_migrations = {
+        "volume": "TEXT NOT NULL DEFAULT ''",
+        "manufacturer": "TEXT NOT NULL DEFAULT ''",
+        "responsible_seller": "TEXT NOT NULL DEFAULT ''",
+        "country_of_origin": "TEXT NOT NULL DEFAULT ''",
+        "expiry_info": "TEXT NOT NULL DEFAULT ''",
+        "functional_info": "TEXT NOT NULL DEFAULT ''",
+        "quality_standard": "TEXT NOT NULL DEFAULT ''",
+    }
+    for column, definition in product_migrations.items():
+        if column not in product_existing:
+            con.execute(f"ALTER TABLE products ADD COLUMN {column} {definition}")
+    order_existing = {row[1] for row in con.execute("PRAGMA table_info(orders)").fetchall()}
+    order_migrations = {
+        "courier": "TEXT NOT NULL DEFAULT ''",
+        "tracking_no": "TEXT NOT NULL DEFAULT ''",
+        "shipped_at": "TEXT",
+        "terms_agreed_at": "TEXT",
+        "privacy_agreed_at": "TEXT",
+    }
+    for column, definition in order_migrations.items():
+        if column not in order_existing:
             con.execute(f"ALTER TABLE orders ADD COLUMN {column} {definition}")
     if con.execute("SELECT COUNT(*) FROM products").fetchone()[0] == 0:
         con.execute("""INSERT INTO products(
@@ -274,6 +364,8 @@ def cart_data():
     con.close()
     items, subtotal = [], 0
     for product in products:
+        if not is_product_sellable(product):
+            continue
         quantity = min(cart[str(product["id"])], max(0, product["stock"]))
         if quantity < 1:
             continue
@@ -287,7 +379,7 @@ def cart_data():
 
 BASE = """
 <!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="description" content="RUBIE 자연유래 화장품을 만나는 보찌미 공식몰"><meta name="csrf-token" content="{{csrf_token}}"><title>{{title}} | BOJJIMI</title>
+<meta name="description" content="RUBIE 자연유래 화장품을 만나는 보찌미 공식몰"><meta name="csrf-token" content="{{csrf_token}}"><meta property="og:title" content="{{title}} | BOJJIMI"><meta property="og:description" content="RUBIE 자연유래 화장품 공식몰"><title>{{title}} | BOJJIMI</title>
 <style>
 *{box-sizing:border-box}:root{--rose:#a44b64;--deep:#4d2934;--blush:#f8edf0;--cream:#fffaf6;--line:#eadde0;--ink:#30272a;--muted:#74686c;--white:#fff}
 html{scroll-behavior:smooth}body{margin:0;background:var(--cream);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans KR",Arial,sans-serif;line-height:1.58}a{text-decoration:none;color:inherit}button,input,select,textarea{font:inherit}
@@ -307,17 +399,17 @@ footer{background:#2e2025;color:#d9ccd0;padding:46px 22px}.footerin{max-width:11
 @media(max-width:520px){.grid,.values{grid-template-columns:1fr}.hero h1{font-size:36px}.hero-art b{font-size:42px}.detail h1{font-size:34px}.section-head{align-items:start;flex-direction:column}.formbox{padding:22px 18px}}
 </style></head><body>
 <div class="announcement">자연에서 찾은 균형 · 정직하게 확인된 정보만 전합니다</div>
-<header class="top"><div class="topin"><a class="logo" href="{{url_for('home')}}">BOJJIMI<small>RUBIE COSMETICS</small></a><nav class="nav"><a class="hide-m" href="{{url_for('shop')}}">제품</a><a class="hide-m" href="{{url_for('brand')}}">브랜드</a>{% if user %}<a class="hide-m" href="{{url_for('mypage')}}">마이페이지</a>{% if user['role']=='admin' %}<a href="{{url_for('admin')}}">관리자</a>{% endif %}<a class="hide-m" href="{{url_for('logout')}}">로그아웃</a>{% else %}<a class="hide-m" href="{{url_for('login')}}">로그인</a>{% endif %}<a href="{{url_for('cart')}}">장바구니 <span class="cart-count">{{cart_count}}</span></a></nav></div></header>
+<header class="top"><div class="topin"><a class="logo" href="{{url_for('home')}}">BOJJIMI<small>RUBIE COSMETICS</small></a><nav class="nav"><a class="hide-m" href="{{url_for('shop')}}">제품</a><a class="hide-m" href="{{url_for('brand')}}">브랜드</a>{% if user %}<a class="hide-m" href="{{url_for('mypage')}}">마이페이지</a>{% if user['role']=='admin' %}<a href="{{url_for('admin')}}">관리자</a>{% endif %}<a class="hide-m" href="{{url_for('logout')}}">로그아웃</a>{% else %}<a class="hide-m" href="{{url_for('order_lookup')}}">비회원 주문조회</a><a class="hide-m" href="{{url_for('login')}}">로그인</a>{% endif %}<a href="{{url_for('cart')}}">장바구니 <span class="cart-count">{{cart_count}}</span></a></nav></div></header>
 {% with messages=get_flashed_messages() %}{% for message in messages %}<div class="flash">{{message}}</div>{% endfor %}{% endwith %}<main class="page">{{body|safe}}</main>
-<footer><div class="footerin"><div><div class="footer-logo">BOJJIMI</div><p class="small">RUBIE의 자연유래 화장품을 소개하는 공식 온라인 스토어</p></div><div class="small"><a href="{{url_for('policy',kind='terms')}}">이용약관</a> · <a href="{{url_for('policy',kind='privacy')}}">개인정보처리방침</a> · <a href="{{url_for('policy',kind='returns')}}">교환·반품정책</a><br>사업자정보·통신판매업 정보는 판매 개시 전 확정해 표시하세요.<br>© 2026 BOJJIMI. All rights reserved.</div></div></footer>
-<nav class="mobile-nav"><a href="{{url_for('home')}}"><span>⌂</span>홈</a><a href="{{url_for('shop')}}"><span>◫</span>제품</a><a href="{{url_for('cart')}}"><span>🛒</span>장바구니</a><a href="{{url_for('mypage') if user else url_for('login')}}"><span>○</span>마이</a></nav>
+<footer><div class="footerin"><div><div class="footer-logo">BOJJIMI</div><p class="small">RUBIE의 자연유래 화장품을 소개하는 공식 온라인 스토어</p><p class="small"><a href="{{url_for('policy',kind='terms')}}">이용약관</a> · <a href="{{url_for('policy',kind='privacy')}}">개인정보처리방침</a> · <a href="{{url_for('policy',kind='returns')}}">교환·반품정책</a></p></div><div class="small">{% if store.business_name %}상호 {{store.business_name}} · 대표 {{store.representative_name}}<br>사업자등록번호 {{store.business_number}} · 통신판매업 {{store.ecommerce_number}}<br>{{store.business_address}}<br>고객센터 {{store.customer_service_phone}} · {{store.customer_service_email}}{% else %}현재 정식 판매 준비 중입니다.{% endif %}<br>© 2026 BOJJIMI. All rights reserved.</div></div></footer>
+<nav class="mobile-nav"><a href="{{url_for('home')}}"><span>⌂</span>홈</a><a href="{{url_for('shop')}}"><span>◫</span>제품</a><a href="{{url_for('cart')}}"><span>🛒</span>장바구니</a><a href="{{url_for('mypage') if user else url_for('order_lookup')}}"><span>○</span>{{'마이' if user else '주문조회'}}</a></nav>
 <script>document.querySelectorAll('form[method="post"],form[method="POST"]').forEach((form)=>{if(!form.querySelector('input[name="csrf_token"]')){const input=document.createElement('input');input.type='hidden';input.name='csrf_token';input.value=document.querySelector('meta[name="csrf-token"]').content;form.prepend(input);}});</script></body></html>
 """
 
 
 def page(title, body, **context):
     cart_count = sum(int(v) for v in session.get("cart", {}).values())
-    return render_template_string(BASE, title=title, body=body, user=current_user(), cart_count=cart_count, csrf_token=csrf_token(), **context)
+    return render_template_string(BASE, title=title, body=body, user=current_user(), cart_count=cart_count, csrf_token=csrf_token(), store=STORE_INFO, **context)
 
 
 @app.route("/")
@@ -357,10 +449,12 @@ def product_detail(product_id):
     user = current_user()
     if not product or (product["status"] == "draft" and (not user or user["role"] != "admin")):
         abort(404)
+    missing = product_missing_fields(product)
+    sellable = is_product_sellable(product)
     body = render_template_string("""
-    <section class="detail"><div class="product-visual">{% if p['image_url'] %}<img src="{{p['image_url']}}" alt="{{p['name']}}">{% else %}<div class="bottle">R</div>{% endif %}{% if p['badge'] %}<span class="badge">{{p['badge']}}</span>{% endif %}</div><div><div class="category">{{p['category']}}</div><h1>{{p['name']}}</h1><p class="lead">{{p['short_desc']}}</p>{% if p['status']=='active' %}<p class="detail-price">{{(p['sale_price'] if p['sale_price'] is not none else p['price'])|won}}</p><form method="post" action="{{url_for('add_cart',product_id=p['id'])}}"><input class="qty" type="number" name="quantity" value="1" min="1" max="{{p['stock']}}"><button class="btn dark" {% if p['stock']<1 %}disabled{% endif %}>{{'장바구니 담기' if p['stock']>0 else '품절'}}</button></form>{% else %}<div class="notice" style="margin-top:24px">정식 판매 전 처방·표시사항·품질 검토 단계입니다. 판매가 시작되면 가격과 전성분을 공개합니다.</div>{% endif %}
-    <div class="info-table"><div class="info-row"><b>제품 설명</b><span>{{p['description'] or '상세정보 준비 중'}}</span></div><div class="info-row"><b>전성분</b><span>{{p['ingredients'] or '정식 처방 확정 후 공개 예정'}}</span></div><div class="info-row"><b>사용법</b><span>{{p['usage']}}</span></div><div class="info-row"><b>주의사항</b><span>{{p['caution']}}</span></div><div class="info-row"><b>배송</b><span>5만원 이상 무료배송 · 기본 배송비 3,000원</span></div></div></div></section>
-    """, p=product)
+    <section class="detail"><div class="product-visual">{% if p['image_url'] %}<img src="{{p['image_url']}}" alt="{{p['name']}}">{% else %}<div class="bottle">R</div>{% endif %}{% if p['badge'] %}<span class="badge">{{p['badge']}}</span>{% endif %}</div><div><div class="category">{{p['category']}}</div><h1>{{p['name']}}</h1><p class="lead">{{p['short_desc']}}</p>{% if sellable %}<p class="detail-price">{{(p['sale_price'] if p['sale_price'] is not none else p['price'])|won}}</p><form method="post" action="{{url_for('add_cart',product_id=p['id'])}}"><input class="qty" type="number" name="quantity" value="1" min="1" max="{{p['stock']}}"><button class="btn dark">장바구니 담기</button></form>{% else %}<div class="notice" style="margin-top:24px">정식 판매 전 처방·표시사항·품질 검토 단계입니다. 판매가 시작되면 가격과 전성분을 공개합니다.</div>{% endif %}
+    <div class="info-table"><div class="info-row"><b>제품 설명</b><span>{{p['description'] or '상세정보 준비 중'}}</span></div><div class="info-row"><b>용량</b><span>{{p['volume'] or '확정 후 공개'}}</span></div><div class="info-row"><b>전성분</b><span>{{p['ingredients'] or '정식 처방 확정 후 공개 예정'}}</span></div><div class="info-row"><b>기능성 정보</b><span>{{p['functional_info'] or '해당 없음 또는 확정 후 공개'}}</span></div><div class="info-row"><b>제조업자</b><span>{{p['manufacturer'] or '확정 후 공개'}}</span></div><div class="info-row"><b>책임판매업자</b><span>{{p['responsible_seller'] or '확정 후 공개'}}</span></div><div class="info-row"><b>제조국</b><span>{{p['country_of_origin'] or '확정 후 공개'}}</span></div><div class="info-row"><b>사용기한</b><span>{{p['expiry_info'] or '확정 후 공개'}}</span></div><div class="info-row"><b>사용방법</b><span>{{p['usage']}}</span></div><div class="info-row"><b>주의사항</b><span>{{p['caution']}}</span></div><div class="info-row"><b>품질보증기준</b><span>{{p['quality_standard'] or '관련 법령 및 소비자분쟁해결기준에 따름'}}</span></div><div class="info-row"><b>배송</b><span>5만원 이상 무료배송 · 기본 배송비 3,000원</span></div></div>{% if user and user['role']=='admin' and missing %}<div class="notice" style="margin-top:16px"><b>판매 전 입력 필요:</b> {{missing|join(', ')}}</div>{% endif %}</div></section>
+    """, p=product, sellable=sellable, missing=missing, user=user)
     return page(product["name"], body)
 
 
@@ -373,6 +467,9 @@ def brand():
 @app.route("/register", methods=["GET", "POST"])
 def register():
     if request.method == "POST":
+        if request.form.get("terms_agree") != "1" or request.form.get("privacy_agree") != "1":
+            flash("이용약관과 개인정보처리방침에 동의해 주세요.")
+            return redirect(url_for("register"))
         email = request.form["email"].strip().lower()
         role = "admin" if ADMIN_EMAIL and email == ADMIN_EMAIL else "customer"
         try:
@@ -380,7 +477,7 @@ def register():
             session["user_id"] = user_id; flash("보찌미 회원가입이 완료되었습니다."); return redirect(url_for("mypage"))
         except sqlite3.IntegrityError:
             flash("이미 가입된 이메일입니다.")
-    return page("회원가입", """<div class="formbox"><div class="eyebrow">JOIN BOJJIMI</div><h2>회원가입</h2><form method="post"><div class="field"><label>이름</label><input name="name" required></div><div class="field"><label>이메일</label><input type="email" name="email" required></div><div class="field"><label>휴대전화</label><input name="phone" required></div><div class="field"><label>비밀번호</label><input type="password" name="password" minlength="8" required></div><button class="btn dark">가입하기</button></form><p class="muted small">가입하면 주문내역과 배송상태를 확인할 수 있습니다.</p></div>""")
+    return page("회원가입", """<div class="formbox"><div class="eyebrow">JOIN BOJJIMI</div><h2>회원가입</h2><form method="post"><div class="field"><label>이름</label><input name="name" required maxlength="50"></div><div class="field"><label>이메일</label><input type="email" name="email" required maxlength="120"></div><div class="field"><label>휴대전화</label><input name="phone" required maxlength="20"></div><div class="field"><label>비밀번호</label><input type="password" name="password" minlength="8" required></div><label class="checkline"><input type="checkbox" name="terms_agree" value="1" required><span><a href="/policy/terms" target="_blank">이용약관</a> 동의 (필수)</span></label><label class="checkline"><input type="checkbox" name="privacy_agree" value="1" required><span><a href="/policy/privacy" target="_blank">개인정보처리방침</a> 동의 (필수)</span></label><button class="btn dark">가입하기</button></form><p class="muted small">가입하면 주문내역과 배송상태를 확인할 수 있습니다.</p></div>""")
 
 
 @app.route("/login", methods=["GET", "POST"])
@@ -388,7 +485,10 @@ def login():
     if request.method == "POST":
         con = db(); user = con.execute("SELECT * FROM users WHERE email=?", (request.form["email"].strip().lower(),)).fetchone(); con.close()
         if user and check_password_hash(user["password_hash"], request.form["password"]):
-            session["user_id"] = user["id"]; flash(f"{user['name']}님, 반갑습니다."); return redirect(request.args.get("next") or url_for("mypage"))
+            next_url = request.args.get("next", "")
+            if not next_url.startswith("/") or next_url.startswith("//"):
+                next_url = url_for("mypage")
+            session["user_id"] = user["id"]; flash(f"{user['name']}님, 반갑습니다."); return redirect(next_url)
         flash("이메일 또는 비밀번호를 확인해 주세요.")
     return page("로그인", """<div class="formbox"><div class="eyebrow">WELCOME BACK</div><h2>로그인</h2><form method="post"><div class="field"><label>이메일</label><input type="email" name="email" required></div><div class="field"><label>비밀번호</label><input type="password" name="password" required></div><button class="btn dark">로그인</button> <a class="btn ghost" href="/register">회원가입</a></form></div>""")
 
@@ -401,7 +501,7 @@ def logout():
 @app.post("/cart/add/<int:product_id>")
 def add_cart(product_id):
     con = db(); product = con.execute("SELECT * FROM products WHERE id=? AND status='active'", (product_id,)).fetchone(); con.close()
-    if not product or product["stock"] < 1:
+    if not is_product_sellable(product):
         flash("현재 구매할 수 없는 제품입니다."); return redirect(url_for("shop"))
     quantity = max(1, min(int(request.form.get("quantity", 1)), product["stock"]))
     cart = session.get("cart", {}); cart[str(product_id)] = min(int(cart.get(str(product_id), 0)) + quantity, product["stock"]); session["cart"] = cart
@@ -430,10 +530,17 @@ def checkout():
     items, subtotal, shipping, total = cart_data()
     if not items:
         flash("장바구니가 비어 있습니다."); return redirect(url_for("shop"))
+    missing_store = store_missing_fields()
+    if APP_ENV == "production" and missing_store:
+        flash("판매 준비 설정이 완료되지 않아 현재 결제를 진행할 수 없습니다.")
+        return redirect(url_for("cart"))
     user = current_user()
     if request.method == "POST":
-        if request.form.get("privacy_agree") != "1" or request.form.get("purchase_agree") != "1":
-            flash("개인정보 수집과 구매조건 확인에 동의해 주세요.")
+        if request.form.get("privacy_agree") != "1" or request.form.get("purchase_agree") != "1" or request.form.get("terms_agree") != "1":
+            flash("이용약관, 개인정보 수집과 구매조건 확인에 동의해 주세요.")
+            return redirect(url_for("checkout"))
+        if not valid_phone(request.form.get("phone", "")):
+            flash("휴대전화 번호를 확인해 주세요.")
             return redirect(url_for("checkout"))
         order_no = datetime.now().strftime("BJ%Y%m%d") + secrets.token_hex(3).upper()
         customer_key = f"cust_{secrets.token_urlsafe(18)}"
@@ -445,19 +552,21 @@ def checkout():
             cur = con.execute("""INSERT INTO orders(
               order_no,user_id,buyer_name,email,phone,postcode,address1,address2,memo,
               payment_method,subtotal,shipping_fee,total,status,payment_status,payment_provider,
-              customer_key,confirm_idempotency_key,inventory_reserved,inventory_restored,expires_at,created_at
-            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", (
+              customer_key,confirm_idempotency_key,inventory_reserved,inventory_restored,expires_at,
+              terms_agreed_at,privacy_agreed_at,created_at
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", (
               order_no, user["id"] if user else None, request.form["buyer_name"].strip(),
               request.form["email"].strip().lower(), request.form["phone"].strip(),
               request.form.get("postcode", "").strip(), request.form["address1"].strip(),
               request.form.get("address2", "").strip(), request.form.get("memo", "").strip(),
               "미선택", subtotal, shipping, total, "결제대기", "READY", "toss",
-              customer_key, confirm_key, 1, 0, expires_at, now()
+              customer_key, confirm_key, 1, 0, expires_at, now(), now(), now()
             ))
             order_id = cur.lastrowid
             for item in items:
                 latest = con.execute("SELECT stock,status FROM products WHERE id=?", (item["product"]["id"],)).fetchone()
-                if not latest or latest["status"] != "active" or latest["stock"] < item["quantity"]: raise ValueError(f"{item['product']['name']}의 재고가 부족합니다.")
+                full_product = con.execute("SELECT * FROM products WHERE id=?", (item["product"]["id"],)).fetchone()
+                if not latest or not is_product_sellable(full_product) or latest["stock"] < item["quantity"]: raise ValueError(f"{item['product']['name']}은 현재 구매할 수 없습니다.")
                 con.execute("INSERT INTO order_items(order_id,product_id,product_name,unit_price,quantity) VALUES(?,?,?,?,?)", (order_id, item["product"]["id"], item["product"]["name"], item["unit_price"], item["quantity"]))
                 con.execute("UPDATE products SET stock=stock-?,updated_at=? WHERE id=?", (item["quantity"], now(), item["product"]["id"]))
             con.commit()
@@ -466,8 +575,8 @@ def checkout():
         con.close(); session["cart"] = {}; session["last_order_no"] = order_no
         return redirect(url_for("payment", order_no=order_no))
     body = render_template_string("""
-    <div class="formbox"><div class="eyebrow">CHECKOUT</div><h2>{{'회원 주문' if user else '비회원 주문'}}</h2>{% if not user %}<div class="notice">회원가입 없이도 주문할 수 있습니다. 결제 후 주문번호를 꼭 보관해 주세요.</div>{% endif %}<form method="post"><div class="row"><div class="field"><label>주문자명</label><input name="buyer_name" value="{{user['name'] if user else ''}}" required></div><div class="field"><label>휴대전화</label><input name="phone" value="{{user['phone'] if user else ''}}" inputmode="tel" required></div></div><div class="field"><label>이메일</label><input type="email" name="email" value="{{user['email'] if user else ''}}" required></div><div class="row"><div class="field"><label>우편번호</label><input name="postcode"></div><div class="field"><label>배송 요청사항</label><input name="memo"></div></div><div class="field"><label>주소</label><input name="address1" required></div><div class="field"><label>상세주소</label><input name="address2"></div><label class="checkline"><input type="checkbox" name="privacy_agree" value="1" required><span><a href="{{url_for('policy',kind='privacy')}}" target="_blank">개인정보 수집·이용</a>에 동의합니다. (필수)</span></label><label class="checkline"><input type="checkbox" name="purchase_agree" value="1" required><span>상품명, 가격, 배송·교환·환불 조건을 확인했으며 구매에 동의합니다. (필수)</span></label><div class="summary-line total"><span>총 결제금액</span><span>{{total|won}}</span></div><button class="btn dark" style="width:100%;margin-top:16px">결제 단계로 이동</button></form></div>
-    """, user=user, total=total)
+    <div class="formbox"><div class="eyebrow">CHECKOUT</div><h2>{{'회원 주문' if user else '비회원 주문'}}</h2>{% if not user %}<div class="notice">회원가입 없이도 주문할 수 있습니다. 결제 후 주문번호와 이메일로 주문을 조회할 수 있습니다.</div>{% endif %}{% for item in items %}<div class="summary-line"><span>{{item.product['name']}} × {{item.quantity}}</span><b>{{item.line_total|won}}</b></div>{% endfor %}<form method="post"><div class="row"><div class="field"><label>주문자명</label><input name="buyer_name" value="{{user['name'] if user else ''}}" required maxlength="50"></div><div class="field"><label>휴대전화</label><input name="phone" value="{{user['phone'] if user else ''}}" inputmode="tel" required maxlength="20"></div></div><div class="field"><label>이메일</label><input type="email" name="email" value="{{user['email'] if user else ''}}" required maxlength="120"></div><div class="row"><div class="field"><label>우편번호</label><input name="postcode" maxlength="10"></div><div class="field"><label>배송 요청사항</label><input name="memo" maxlength="200"></div></div><div class="field"><label>주소</label><input name="address1" required maxlength="200"></div><div class="field"><label>상세주소</label><input name="address2" maxlength="200"></div><label class="checkline"><input type="checkbox" name="terms_agree" value="1" required><span><a href="{{url_for('policy',kind='terms')}}" target="_blank">이용약관</a>에 동의합니다. (필수)</span></label><label class="checkline"><input type="checkbox" name="privacy_agree" value="1" required><span><a href="{{url_for('policy',kind='privacy')}}" target="_blank">개인정보 수집·이용</a>에 동의합니다. (필수)</span></label><label class="checkline"><input type="checkbox" name="purchase_agree" value="1" required><span>상품명, 가격, 배송·교환·환불 조건을 확인했으며 구매에 동의합니다. (필수)</span></label><div class="summary-line total"><span>총 결제금액</span><span>{{total|won}}</span></div><button class="btn dark" style="width:100%;margin-top:16px">결제 단계로 이동</button></form></div>
+    """, user=user, total=total, items=items)
     return page("주문/결제", body)
 
 
@@ -571,6 +680,27 @@ def order_complete(order_no):
     return page("주문 완료", body)
 
 
+@app.route("/order/lookup", methods=["GET", "POST"])
+def order_lookup():
+    order = None
+    items = []
+    if request.method == "POST":
+        order_no = request.form.get("order_no", "").strip().upper()[:30]
+        email = request.form.get("email", "").strip().lower()[:120]
+        con = db()
+        order = con.execute("SELECT * FROM orders WHERE order_no=? AND lower(email)=?", (order_no, email)).fetchone()
+        if order:
+            items = con.execute("SELECT * FROM order_items WHERE order_id=?", (order["id"],)).fetchall()
+            session["last_order_no"] = order["order_no"]
+        con.close()
+        if not order:
+            flash("주문번호와 주문 시 입력한 이메일을 확인해 주세요.")
+    body = render_template_string("""
+    <div class="formbox"><div class="eyebrow">GUEST ORDER</div><h2>비회원 주문조회</h2><form method="post"><div class="field"><label>주문번호</label><input name="order_no" required maxlength="30" placeholder="BJ로 시작하는 주문번호"></div><div class="field"><label>주문 이메일</label><input type="email" name="email" required maxlength="120"></div><button class="btn dark" style="width:100%">조회하기</button></form>{% if o %}<div class="order-head" style="margin-top:28px"><div><b>{{o['order_no']}}</b><div class="muted small">{{o['created_at']}}</div></div><span class="status">{{o['status']}}</span></div>{% for item in items %}<div class="summary-line"><span>{{item['product_name']}} × {{item['quantity']}}</span><b>{{(item['unit_price']*item['quantity'])|won}}</b></div>{% endfor %}<div class="summary-line total"><span>결제금액</span><span>{{o['total']|won}}</span></div><div class="summary-line"><span>결제상태</span><b>{{o['payment_status']}}</b></div>{% if o['courier'] or o['tracking_no'] %}<div class="notice">배송사 {{o['courier'] or '-'}} · 운송장 {{o['tracking_no'] or '-'}}</div>{% endif %}{% if o['payment_status']=='READY' %}<a class="btn dark" style="width:100%;margin-top:14px" href="{{url_for('payment',order_no=o['order_no'])}}">결제 계속하기</a>{% endif %}{% endif %}</div>
+    """, o=order, items=items)
+    return page("비회원 주문조회", body)
+
+
 @app.route("/mypage")
 @login_required
 def mypage():
@@ -585,7 +715,7 @@ def member_order(order_no):
     user = current_user(); con = db(); order = con.execute("SELECT * FROM orders WHERE order_no=? AND user_id=?", (order_no, user["id"])).fetchone()
     if not order: con.close(); abort(404)
     items = con.execute("SELECT * FROM order_items WHERE order_id=?", (order["id"],)).fetchall(); con.close()
-    body = render_template_string("""<div class="formbox"><div class="order-head"><div><div class="eyebrow">ORDER DETAIL</div><h2>{{o['order_no']}}</h2></div><span class="status">{{o['status']}}</span></div>{% for item in items %}<div class="summary-line"><span>{{item['product_name']}} × {{item['quantity']}}</span><b>{{(item['unit_price']*item['quantity'])|won}}</b></div>{% endfor %}<div class="summary-line total"><span>{{'총 결제금액' if o['payment_status']=='PAID' else '주문금액'}}</span><span>{{o['total']|won}}</span></div><div class="summary-line"><span>결제상태</span><b>{{o['payment_status']}}</b></div>{% if o['payment_status']=='READY' %}<a class="btn dark" style="width:100%;margin-top:14px" href="{{url_for('payment',order_no=o['order_no'])}}">결제 계속하기</a>{% endif %}<p class="muted small">배송지: {{o['address1']}} {{o['address2']}}</p></div>""", o=order, items=items)
+    body = render_template_string("""<div class="formbox"><div class="order-head"><div><div class="eyebrow">ORDER DETAIL</div><h2>{{o['order_no']}}</h2></div><span class="status">{{o['status']}}</span></div>{% for item in items %}<div class="summary-line"><span>{{item['product_name']}} × {{item['quantity']}}</span><b>{{(item['unit_price']*item['quantity'])|won}}</b></div>{% endfor %}<div class="summary-line total"><span>{{'총 결제금액' if o['payment_status']=='PAID' else '주문금액'}}</span><span>{{o['total']|won}}</span></div><div class="summary-line"><span>결제상태</span><b>{{o['payment_status']}}</b></div>{% if o['courier'] or o['tracking_no'] %}<div class="notice">배송사 {{o['courier'] or '-'}} · 운송장 {{o['tracking_no'] or '-'}}</div>{% endif %}{% if o['payment_status']=='READY' %}<a class="btn dark" style="width:100%;margin-top:14px" href="{{url_for('payment',order_no=o['order_no'])}}">결제 계속하기</a>{% endif %}<p class="muted small">배송지: {{o['address1']}} {{o['address2']}}</p></div>""", o=order, items=items)
     return page("주문 상세", body)
 
 
@@ -595,28 +725,55 @@ def admin():
     con = db()
     stats = {"products": con.execute("SELECT COUNT(*) FROM products").fetchone()[0], "active": con.execute("SELECT COUNT(*) FROM products WHERE status='active'").fetchone()[0], "orders": con.execute("SELECT COUNT(*) FROM orders").fetchone()[0], "sales": con.execute("SELECT COALESCE(SUM(total),0) FROM orders WHERE payment_status='PAID'").fetchone()[0]}
     products = con.execute("SELECT * FROM products ORDER BY id DESC").fetchall(); orders = con.execute("SELECT * FROM orders ORDER BY id DESC LIMIT 30").fetchall(); con.close()
+    missing_store = store_missing_fields()
+    product_checks = {p["id"]: product_missing_fields(p) for p in products}
     body = render_template_string("""
-    <section class="section" style="padding-top:12px"><div class="eyebrow">STORE ADMIN</div><h2>보찌미 관리자</h2><div class="admin-grid"><div class="kpi">전체 제품<b>{{s.products}}</b></div><div class="kpi">판매 중<b>{{s.active}}</b></div><div class="kpi">전체 주문<b>{{s.orders}}</b></div><div class="kpi">실결제 매출<b style="font-size:20px">{{s.sales|won}}</b></div></div><div class="section-head"><h3>제품 관리</h3><a class="btn small" href="{{url_for('admin_product_new')}}">제품 추가</a></div><table><tr><th>ID</th><th>제품명</th><th>상태</th><th>가격</th><th>재고</th><th></th></tr>{% for p in products %}<tr><td>{{p['id']}}</td><td>{{p['name']}}</td><td>{{p['status']}}</td><td>{{p['price']|won}}</td><td>{{p['stock']}}</td><td><a href="{{url_for('admin_product_edit',product_id=p['id'])}}">수정</a></td></tr>{% endfor %}</table></section><section class="section"><h3>최근 주문</h3><table><tr><th>주문번호</th><th>주문자</th><th>금액</th><th>결제</th><th>주문상태</th><th></th></tr>{% for o in orders %}<tr><td>{{o['order_no']}}</td><td>{{o['buyer_name']}}</td><td>{{o['total']|won}}</td><td>{{o['payment_status']}}</td><td>{{o['status']}}</td><td><a href="{{url_for('admin_order_edit',order_id=o['id'])}}">처리</a></td></tr>{% endfor %}</table></section>
-    """, s=type("Stats", (), stats), products=products, orders=orders)
+    <section class="section" style="padding-top:12px"><div class="eyebrow">STORE ADMIN</div><h2>보찌미 관리자</h2><div class="admin-grid"><div class="kpi">전체 제품<b>{{s.products}}</b></div><div class="kpi">판매 중<b>{{s.active}}</b></div><div class="kpi">전체 주문<b>{{s.orders}}</b></div><div class="kpi">실결제 매출<b style="font-size:20px">{{s.sales|won}}</b></div></div>{% if missing_store %}<div class="notice"><b>판매 개시 전 설정 필요</b><br>{{missing_store|join(' · ')}}<br><span class="small">배포 환경변수에 입력하면 자동으로 완료 처리됩니다.</span></div>{% else %}<div class="notice"><b>사업자·결제 기본설정 완료</b></div>{% endif %}<div class="section-head"><h3>제품 관리</h3><a class="btn small" href="{{url_for('admin_product_new')}}">제품 추가</a></div><table><tr><th>ID</th><th>제품명</th><th>상태</th><th>판매 준비</th><th>가격</th><th>재고</th><th></th></tr>{% for p in products %}<tr><td>{{p['id']}}</td><td>{{p['name']}}</td><td>{{p['status']}}</td><td>{{'완료' if not checks[p['id']] else checks[p['id']]|join(', ')}}</td><td>{{p['price']|won}}</td><td>{{p['stock']}}</td><td><a href="{{url_for('admin_product_edit',product_id=p['id'])}}">수정</a></td></tr>{% endfor %}</table></section><section class="section"><h3>최근 주문</h3><table><tr><th>주문번호</th><th>주문자</th><th>금액</th><th>결제</th><th>주문상태</th><th></th></tr>{% for o in orders %}<tr><td>{{o['order_no']}}</td><td>{{o['buyer_name']}}</td><td>{{o['total']|won}}</td><td>{{o['payment_status']}}</td><td>{{o['status']}}</td><td><a href="{{url_for('admin_order_edit',order_id=o['id'])}}">처리</a></td></tr>{% endfor %}</table></section>
+    """, s=type("Stats", (), stats), products=products, orders=orders, missing_store=missing_store, checks=product_checks)
     return page("관리자", body)
 
 
 def product_form(product=None):
     return render_template_string("""
-    <div class="formbox"><div class="eyebrow">PRODUCT ADMIN</div><h2>{{'제품 수정' if p else '제품 추가'}}</h2><form method="post"><div class="field"><label>제품명</label><input name="name" value="{{p['name'] if p else ''}}" required></div><div class="row"><div class="field"><label>카테고리</label><select name="category">{% for c in categories %}<option {{'selected' if p and p['category']==c else ''}}>{{c}}</option>{% endfor %}</select></div><div class="field"><label>상태</label><select name="status"><option value="draft" {{'selected' if p and p['status']=='draft' else ''}}>비공개</option><option value="coming" {{'selected' if p and p['status']=='coming' else ''}}>출시 준비</option><option value="active" {{'selected' if p and p['status']=='active' else ''}}>판매 중</option></select></div></div><div class="field"><label>한줄 설명</label><input name="short_desc" value="{{p['short_desc'] if p else ''}}"></div><div class="field"><label>상세 설명</label><textarea name="description">{{p['description'] if p else ''}}</textarea></div><div class="field"><label>전성분</label><textarea name="ingredients">{{p['ingredients'] if p else ''}}</textarea></div><div class="row"><div class="field"><label>정가</label><input type="number" min="0" name="price" value="{{p['price'] if p else 0}}"></div><div class="field"><label>판매가</label><input type="number" min="0" name="sale_price" value="{{p['sale_price'] if p and p['sale_price'] is not none else ''}}"></div></div><div class="row"><div class="field"><label>재고</label><input type="number" min="0" name="stock" value="{{p['stock'] if p else 0}}"></div><div class="field"><label>배지</label><input name="badge" value="{{p['badge'] if p else ''}}"></div></div><div class="field"><label>이미지 URL</label><input type="url" name="image_url" value="{{p['image_url'] if p else ''}}"></div><div class="field"><label>사용법</label><textarea name="usage">{{p['usage'] if p else ''}}</textarea></div><div class="field"><label>주의사항</label><textarea name="caution">{{p['caution'] if p else ''}}</textarea></div><label><input type="checkbox" name="featured" value="1" {{'checked' if p and p['featured'] else ''}}> 메인 추천제품</label><div class="actions"><button class="btn dark">저장</button><a class="btn ghost" href="{{url_for('admin')}}">취소</a></div></form></div>
+    <div class="formbox"><div class="eyebrow">PRODUCT ADMIN</div><h2>{{'제품 수정' if p else '제품 추가'}}</h2><div class="notice">판매 중 전환에는 가격·재고와 화장품 필수정보가 모두 필요합니다.</div><form method="post"><div class="field"><label>제품명</label><input name="name" value="{{p['name'] if p else ''}}" required></div><div class="row"><div class="field"><label>카테고리</label><select name="category">{% for c in categories %}<option {{'selected' if p and p['category']==c else ''}}>{{c}}</option>{% endfor %}</select></div><div class="field"><label>상태</label><select name="status"><option value="draft" {{'selected' if p and p['status']=='draft' else ''}}>비공개</option><option value="coming" {{'selected' if p and p['status']=='coming' else ''}}>출시 준비</option><option value="active" {{'selected' if p and p['status']=='active' else ''}}>판매 중</option></select></div></div><div class="field"><label>한줄 설명</label><input name="short_desc" value="{{p['short_desc'] if p else ''}}"></div><div class="field"><label>상세 설명</label><textarea name="description">{{p['description'] if p else ''}}</textarea></div><div class="row"><div class="field"><label>용량</label><input name="volume" value="{{p['volume'] if p else ''}}" placeholder="예: 400mL"></div><div class="field"><label>제조국</label><input name="country_of_origin" value="{{p['country_of_origin'] if p else ''}}" placeholder="예: 대한민국"></div></div><div class="field"><label>전성분</label><textarea name="ingredients">{{p['ingredients'] if p else ''}}</textarea></div><div class="field"><label>기능성 정보</label><textarea name="functional_info" placeholder="기능성화장품 심사·보고 내용 또는 해당 없음">{{p['functional_info'] if p else ''}}</textarea></div><div class="row"><div class="field"><label>화장품 제조업자</label><input name="manufacturer" value="{{p['manufacturer'] if p else ''}}"></div><div class="field"><label>화장품책임판매업자</label><input name="responsible_seller" value="{{p['responsible_seller'] if p else ''}}"></div></div><div class="field"><label>사용기한·개봉 후 사용기간</label><input name="expiry_info" value="{{p['expiry_info'] if p else ''}}" placeholder="예: 제조일로부터 30개월, 개봉 후 12개월"></div><div class="field"><label>품질보증기준</label><textarea name="quality_standard">{{p['quality_standard'] if p else '본 제품에 이상이 있을 경우 관련 법령 및 소비자분쟁해결기준에 따라 보상합니다.'}}</textarea></div><div class="row"><div class="field"><label>정가</label><input type="number" min="0" name="price" value="{{p['price'] if p else 0}}"></div><div class="field"><label>판매가</label><input type="number" min="0" name="sale_price" value="{{p['sale_price'] if p and p['sale_price'] is not none else ''}}"></div></div><div class="row"><div class="field"><label>재고</label><input type="number" min="0" name="stock" value="{{p['stock'] if p else 0}}"></div><div class="field"><label>배지</label><input name="badge" value="{{p['badge'] if p else ''}}"></div></div><div class="field"><label>이미지 URL</label><input type="url" name="image_url" value="{{p['image_url'] if p else ''}}"></div><div class="field"><label>사용방법</label><textarea name="usage">{{p['usage'] if p else ''}}</textarea></div><div class="field"><label>사용 시 주의사항</label><textarea name="caution">{{p['caution'] if p else ''}}</textarea></div><label><input type="checkbox" name="featured" value="1" {{'checked' if p and p['featured'] else ''}}> 메인 추천제품</label><div class="actions"><button class="btn dark">저장</button><a class="btn ghost" href="{{url_for('admin')}}">취소</a></div></form></div>
     """, p=product, categories=CATEGORIES)
 
 
 def product_payload():
     sale_price = request.form.get("sale_price", "").strip()
-    return (request.form["name"].strip(), request.form["category"], request.form.get("short_desc", "").strip(), request.form.get("description", "").strip(), request.form.get("ingredients", "").strip(), request.form.get("usage", "").strip(), request.form.get("caution", "").strip(), max(0, int(request.form.get("price") or 0)), int(sale_price) if sale_price else None, max(0, int(request.form.get("stock") or 0)), request.form.get("image_url", "").strip(), request.form.get("badge", "").strip(), request.form.get("status", "draft"), 1 if request.form.get("featured") else 0)
+    return {
+        "name": request.form["name"].strip(), "category": request.form["category"],
+        "short_desc": request.form.get("short_desc", "").strip(), "description": request.form.get("description", "").strip(),
+        "ingredients": request.form.get("ingredients", "").strip(), "usage": request.form.get("usage", "").strip(),
+        "caution": request.form.get("caution", "").strip(), "price": max(0, int(request.form.get("price") or 0)),
+        "sale_price": int(sale_price) if sale_price else None, "stock": max(0, int(request.form.get("stock") or 0)),
+        "image_url": request.form.get("image_url", "").strip(), "badge": request.form.get("badge", "").strip(),
+        "status": request.form.get("status", "draft"), "featured": 1 if request.form.get("featured") else 0,
+        "volume": request.form.get("volume", "").strip(), "manufacturer": request.form.get("manufacturer", "").strip(),
+        "responsible_seller": request.form.get("responsible_seller", "").strip(), "country_of_origin": request.form.get("country_of_origin", "").strip(),
+        "expiry_info": request.form.get("expiry_info", "").strip(), "functional_info": request.form.get("functional_info", "").strip(),
+        "quality_standard": request.form.get("quality_standard", "").strip(),
+    }
+
+
+def product_values(payload):
+    keys = ["name", "category", "short_desc", "description", "ingredients", "usage", "caution", "price", "sale_price", "stock", "image_url", "badge", "status", "featured", "volume", "manufacturer", "responsible_seller", "country_of_origin", "expiry_info", "functional_info", "quality_standard"]
+    return tuple(payload[key] for key in keys)
+
+
+def validate_product_activation(payload):
+    if payload["category"] not in CATEGORIES or payload["status"] not in {"draft", "coming", "active"}:
+        return ["카테고리 또는 공개 상태"]
+    return product_missing_fields(payload) if payload["status"] == "active" else []
 
 
 @app.route("/admin/product/new", methods=["GET", "POST"])
 @admin_required
 def admin_product_new():
     if request.method == "POST":
-        con = db(); con.execute("""INSERT INTO products(name,category,short_desc,description,ingredients,usage,caution,price,sale_price,stock,image_url,badge,status,featured,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", product_payload() + (now(), now())); con.commit(); con.close(); flash("제품이 추가되었습니다."); return redirect(url_for("admin"))
+        payload = product_payload(); missing = validate_product_activation(payload)
+        if missing: flash("판매 중 전환 전 입력 필요: " + ", ".join(missing)); return page("제품 추가", product_form())
+        con = db(); con.execute("""INSERT INTO products(name,category,short_desc,description,ingredients,usage,caution,price,sale_price,stock,image_url,badge,status,featured,volume,manufacturer,responsible_seller,country_of_origin,expiry_info,functional_info,quality_standard,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", product_values(payload) + (now(), now())); con.commit(); con.close(); flash("제품이 추가되었습니다."); return redirect(url_for("admin"))
     return page("제품 추가", product_form())
 
 
@@ -626,7 +783,9 @@ def admin_product_edit(product_id):
     con = db(); product = con.execute("SELECT * FROM products WHERE id=?", (product_id,)).fetchone()
     if not product: con.close(); abort(404)
     if request.method == "POST":
-        con.execute("""UPDATE products SET name=?,category=?,short_desc=?,description=?,ingredients=?,usage=?,caution=?,price=?,sale_price=?,stock=?,image_url=?,badge=?,status=?,featured=?,updated_at=? WHERE id=?""", product_payload() + (now(), product_id)); con.commit(); con.close(); flash("제품 정보가 수정되었습니다."); return redirect(url_for("admin"))
+        payload = product_payload(); missing = validate_product_activation(payload)
+        if missing: con.close(); flash("판매 중 전환 전 입력 필요: " + ", ".join(missing)); return page("제품 수정", product_form(product))
+        con.execute("""UPDATE products SET name=?,category=?,short_desc=?,description=?,ingredients=?,usage=?,caution=?,price=?,sale_price=?,stock=?,image_url=?,badge=?,status=?,featured=?,volume=?,manufacturer=?,responsible_seller=?,country_of_origin=?,expiry_info=?,functional_info=?,quality_standard=?,updated_at=? WHERE id=?""", product_values(payload) + (now(), product_id)); con.commit(); con.close(); flash("제품 정보가 수정되었습니다."); return redirect(url_for("admin"))
     con.close(); return page("제품 수정", product_form(product))
 
 
@@ -642,9 +801,14 @@ def admin_order_edit(order_id):
             con.close(); flash("실제 결제 승인 전에는 배송 단계로 변경할 수 없습니다."); return redirect(url_for("admin_order_edit", order_id=order_id))
         if status in {"취소", "환불완료"}:
             con.close(); flash("결제 취소·환불 버튼을 사용해 주세요."); return redirect(url_for("admin_order_edit", order_id=order_id))
-        con.execute("UPDATE orders SET status=? WHERE id=?", (status, order_id)); con.commit(); con.close(); flash("주문상태가 변경되었습니다."); return redirect(url_for("admin"))
+        courier = request.form.get("courier", "").strip()[:50]
+        tracking_no = request.form.get("tracking_no", "").strip()[:80]
+        if status in {"배송중", "배송완료"} and (not courier or not tracking_no):
+            con.close(); flash("배송중 처리에는 배송사와 운송장번호가 필요합니다."); return redirect(url_for("admin_order_edit", order_id=order_id))
+        shipped_at = order["shipped_at"] or (now() if status == "배송중" else None)
+        con.execute("UPDATE orders SET status=?,courier=?,tracking_no=?,shipped_at=? WHERE id=?", (status, courier, tracking_no, shipped_at, order_id)); con.commit(); con.close(); flash("주문상태와 배송정보가 변경되었습니다."); return redirect(url_for("admin"))
     items = con.execute("SELECT * FROM order_items WHERE order_id=?", (order_id,)).fetchall(); con.close()
-    body = render_template_string("""<div class="formbox"><div class="eyebrow">ORDER ADMIN</div><h2>{{o['order_no']}}</h2><p>{{o['buyer_name']}} · {{o['phone']}} · {{o['email']}}</p><p class="muted">{{o['address1']}} {{o['address2']}}</p>{% for item in items %}<div class="summary-line"><span>{{item['product_name']}} × {{item['quantity']}}</span><b>{{(item['unit_price']*item['quantity'])|won}}</b></div>{% endfor %}<div class="summary-line total"><span>합계</span><span>{{o['total']|won}}</span></div><div class="summary-line"><span>결제상태</span><b>{{o['payment_status']}}</b></div><div class="summary-line"><span>결제수단</span><b>{{o['payment_method']}}</b></div><form method="post"><div class="field"><label>배송·주문상태</label><select name="status">{% for status in statuses %}<option {{'selected' if status==o['status'] else ''}}>{{status}}</option>{% endfor %}</select></div><button class="btn dark">상태 저장</button></form>{% if o['payment_status'] in ['READY','PAID'] %}<form method="post" action="{{url_for('admin_order_cancel',order_id=o['id'])}}" onsubmit="return confirm('이 주문을 취소하고 결제금액을 환불할까요?')"><div class="field" style="margin-top:24px"><label>취소·환불 사유</label><input name="cancel_reason" value="고객 요청" required></div><button class="btn danger">{{'결제 전 주문 취소' if o['payment_status']=='READY' else '전액 환불하기'}}</button></form>{% endif %}</div>""", o=order, items=items, statuses=ORDER_STATUSES)
+    body = render_template_string("""<div class="formbox"><div class="eyebrow">ORDER ADMIN</div><h2>{{o['order_no']}}</h2><p>{{o['buyer_name']}} · {{o['phone']}} · {{o['email']}}</p><p class="muted">{{o['address1']}} {{o['address2']}}</p>{% for item in items %}<div class="summary-line"><span>{{item['product_name']}} × {{item['quantity']}}</span><b>{{(item['unit_price']*item['quantity'])|won}}</b></div>{% endfor %}<div class="summary-line total"><span>합계</span><span>{{o['total']|won}}</span></div><div class="summary-line"><span>결제상태</span><b>{{o['payment_status']}}</b></div><div class="summary-line"><span>결제수단</span><b>{{o['payment_method']}}</b></div><form method="post"><div class="field"><label>배송·주문상태</label><select name="status">{% for status in statuses %}<option {{'selected' if status==o['status'] else ''}}>{{status}}</option>{% endfor %}</select></div><div class="row"><div class="field"><label>배송사</label><input name="courier" value="{{o['courier']}}" placeholder="예: CJ대한통운"></div><div class="field"><label>운송장번호</label><input name="tracking_no" value="{{o['tracking_no']}}"></div></div><button class="btn dark">상태·배송정보 저장</button></form>{% if o['payment_status'] in ['READY','PAID'] %}<form method="post" action="{{url_for('admin_order_cancel',order_id=o['id'])}}" onsubmit="return confirm('이 주문을 취소하고 결제금액을 환불할까요?')"><div class="field" style="margin-top:24px"><label>취소·환불 사유</label><input name="cancel_reason" value="고객 요청" required></div><button class="btn danger">{{'결제 전 주문 취소' if o['payment_status']=='READY' else '전액 환불하기'}}</button></form>{% endif %}</div>""", o=order, items=items, statuses=ORDER_STATUSES)
     return page("주문 처리", body)
 
 
@@ -709,13 +873,34 @@ def toss_webhook():
 @app.get("/policy/<kind>")
 def policy(kind):
     policies = {
-        "terms": ("이용약관", "상품 주문·결제·배송·취소와 회원 서비스 이용 기준을 안내하는 약관입니다. 사업자 정보와 실제 운영정책 확정 후 최종 문안으로 교체해야 합니다."),
-        "privacy": ("개인정보처리방침", "주문 처리와 배송, 고객 문의를 위해 이름·연락처·이메일·배송주소를 수집합니다. 법정 보관기간 및 실제 수탁업체 확정 후 세부 항목을 고지해야 합니다."),
-        "returns": ("교환·반품정책", "상품 수령 후 관련 법령과 고지된 조건에 따라 교환·반품을 신청할 수 있습니다. 개봉·사용한 화장품의 제한 기준과 반품 주소·배송비는 판매 개시 전 확정해 표시해야 합니다."),
+        "terms": ("이용약관", """
+        <h3>1. 목적과 사업자</h3><p>이 약관은 BOJJIMI × RUBIE 온라인몰이 제공하는 상품정보, 주문, 결제 및 배송 서비스의 이용조건을 정합니다. 판매자는 <b>{business_name}</b>, 대표자는 <b>{representative_name}</b>입니다.</p>
+        <h3>2. 주문과 계약 성립</h3><p>고객이 상품과 결제금액, 배송·교환·환불 조건을 확인하고 결제를 완료하면 주문이 접수됩니다. 재고 부족, 표시 오류 또는 결제 이상이 확인되면 판매자는 사유를 안내하고 주문을 취소하거나 결제금액을 환불할 수 있습니다.</p>
+        <h3>3. 결제와 배송</h3><p>결제는 사이트에 표시된 결제수단으로 진행합니다. 기본 배송비는 3,000원이며 상품금액 50,000원 이상은 무료배송입니다. 배송상태와 운송장번호는 주문조회에서 확인할 수 있습니다.</p>
+        <h3>4. 취소·교환·반품</h3><p>주문취소와 교환·반품은 별도의 교환·반품정책 및 관계 법령에 따릅니다. 환불은 결제수단을 통해 처리되며 카드사·결제기관 사정에 따라 반영 시점이 달라질 수 있습니다.</p>
+        <h3>5. 회원 의무</h3><p>회원은 정확한 정보를 제공하고 계정정보를 안전하게 관리해야 합니다. 타인의 정보를 무단 사용하거나 서비스 운영을 방해해서는 안 됩니다.</p>
+        <h3>6. 문의</h3><p>고객센터 {customer_service_phone} · {customer_service_email}</p>
+        """),
+        "privacy": ("개인정보처리방침", """
+        <h3>1. 수집 항목과 목적</h3><p>주문·결제·배송·환불 및 고객문의 처리를 위해 이름, 이메일, 휴대전화, 배송주소, 주문내역과 결제상태를 처리합니다. 회원가입 시 이메일, 이름, 휴대전화 및 암호화된 비밀번호를 처리합니다.</p>
+        <h3>2. 보유기간</h3><p>회원정보는 탈퇴 시까지 보유하며, 주문·결제 등 거래기록은 전자상거래 관련 법령 등에서 정한 기간 동안 보관한 뒤 파기합니다. 법령상 보존의무가 없는 정보는 처리 목적 달성 후 지체 없이 파기합니다.</p>
+        <h3>3. 제3자 제공과 처리위탁</h3><p>상품 결제와 배송에 필요한 범위에서 결제대행사와 배송업체가 정보를 처리할 수 있습니다. 실제 계약 업체와 위탁 내용은 판매 개시 전에 이 방침에 반영합니다.</p>
+        <h3>4. 이용자의 권리</h3><p>이용자는 개인정보 열람·정정·삭제·처리정지를 요청할 수 있습니다. 법령상 보관의무가 있는 거래정보는 해당 기간 동안 삭제가 제한될 수 있습니다.</p>
+        <h3>5. 안전성 확보조치</h3><p>비밀번호 암호화, 접근권한 제한, 전송구간 보호 및 결제정보의 결제대행사 직접 처리를 적용합니다. 카드번호를 사이트 데이터베이스에 저장하지 않습니다.</p>
+        <h3>6. 개인정보 보호책임자</h3><p>{privacy_officer} · {customer_service_email} · {customer_service_phone}</p>
+        """),
+        "returns": ("교환·반품정책", """
+        <h3>신청기간</h3><p>단순 변심에 의한 청약철회는 상품 수령일로부터 7일 이내 신청할 수 있습니다. 표시·광고 내용과 다르거나 계약내용과 다르게 이행된 경우에는 관계 법령이 정한 기간 내 신청할 수 있습니다.</p>
+        <h3>제한 사유</h3><p>고객 책임으로 상품이 훼손되었거나, 화장품을 개봉·사용하여 상품 가치가 현저히 감소한 경우에는 단순 변심 교환·반품이 제한될 수 있습니다. 다만 제품 하자나 오배송은 제외합니다.</p>
+        <h3>비용 부담</h3><p>단순 변심의 왕복배송비는 고객이 부담하고, 하자·오배송의 배송비는 판매자가 부담합니다. 상품을 임의로 발송하지 말고 고객센터에 먼저 접수해 주세요.</p>
+        <h3>접수와 반품지</h3><p>고객센터 {customer_service_phone} · {customer_service_email}<br>반품주소: {return_address}</p>
+        <h3>환불</h3><p>반품 상품 확인 후 결제취소를 진행합니다. 실제 환불 반영 시점은 카드사 또는 결제기관에 따라 달라질 수 있습니다.</p>
+        """),
     }
     if kind not in policies: abort(404)
     title, content = policies[kind]
-    return page(title, render_template_string("""<div class="formbox"><div class="eyebrow">SHOP POLICY</div><h2>{{title}}</h2><p>{{content}}</p><div class="notice">현재는 판매 준비용 문안입니다. 사업자정보와 운영정책 확정 전에는 판매를 시작하지 마세요.</div></div>""", title=title, content=content))
+    content = content.format(**{key: value or "판매 개시 전 고지" for key, value in STORE_INFO.items()})
+    return page(title, render_template_string("""<div class="formbox"><div class="eyebrow">SHOP POLICY</div><h2>{{title}}</h2>{{content|safe}}<p class="muted small">시행일: 2026년 10월 4일</p></div>""", title=title, content=content))
 
 
 @app.errorhandler(404)
