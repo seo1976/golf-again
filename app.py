@@ -76,6 +76,8 @@ def store_missing_fields(include_payment=True):
     missing = [label for key, label in STORE_REQUIRED_FIELDS.items() if not STORE_INFO.get(key)]
     if APP_ENV == "production" and app.secret_key == "bojjimi-dev-change-this-key":
         missing.append("운영용 SECRET_KEY")
+    if APP_ENV == "production" and not os.environ.get("DATABASE_PATH", "").strip():
+        missing.append("영구 데이터 저장경로(DATABASE_PATH)")
     if include_payment and not (TOSS_CLIENT_KEY and TOSS_SECRET_KEY):
         missing.append("토스페이먼츠 연동키")
     return missing
