@@ -41,7 +41,7 @@ STORE_INFO = {
     "privacy_officer": os.environ.get("PRIVACY_OFFICER", "").strip(),
 }
 
-CATEGORIES = ["두피·헤어", "페이스", "바디", "천연오일", "세트"]
+CATEGORIES = ["탈모 증상 완화", "두피 샴푸", "두피 토닉·스프레이", "두피 세럼·앰플", "두피 스케일링", "모발 영양", "두피케어 세트"]
 ORDER_STATUSES = ["결제대기", "결제완료", "상품준비", "배송중", "배송완료", "취소", "환불완료"]
 PAYMENT_STATUSES = {"READY", "PAID", "FAILED", "CANCELED"}
 PRODUCT_REQUIRED_FIELDS = {
@@ -104,7 +104,7 @@ def valid_phone(value):
 
 
 def is_product_sellable(product):
-    return product and product["status"] == "active" and not product_missing_fields(product)
+    return product and product["status"] == "active" and not product_missing_fields(product) and (("approval_status" not in product.keys()) or product["approval_status"] == "approved")
 
 
 def init_db():
@@ -114,6 +114,24 @@ def init_db():
       id INTEGER PRIMARY KEY AUTOINCREMENT, email TEXT UNIQUE NOT NULL,
       password_hash TEXT NOT NULL, name TEXT NOT NULL, phone TEXT NOT NULL DEFAULT '',
       role TEXT NOT NULL DEFAULT 'customer', created_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS suppliers(
+      id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE,
+      contact_email TEXT NOT NULL DEFAULT '', contact_phone TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'pending', created_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS supplier_users(
+      supplier_id INTEGER NOT NULL, user_id INTEGER NOT NULL UNIQUE,
+      PRIMARY KEY(supplier_id,user_id),
+      FOREIGN KEY(supplier_id) REFERENCES suppliers(id),
+      FOREIGN KEY(user_id) REFERENCES users(id)
+    );
+    CREATE TABLE IF NOT EXISTS supplier_settlements(
+      id INTEGER PRIMARY KEY AUTOINCREMENT, supplier_id INTEGER NOT NULL,
+      order_item_id INTEGER NOT NULL UNIQUE, supply_amount INTEGER NOT NULL DEFAULT 0,
+      status TEXT NOT NULL DEFAULT 'pending', created_at TEXT NOT NULL,
+      FOREIGN KEY(supplier_id) REFERENCES suppliers(id),
+      FOREIGN KEY(order_item_id) REFERENCES order_items(id)
     );
     CREATE TABLE IF NOT EXISTS products(
       id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, category TEXT NOT NULL,
@@ -177,6 +195,10 @@ def init_db():
     for column, definition in migrations.items():
         if column not in existing:
             con.execute(f"ALTER TABLE orders ADD COLUMN {column} {definition}")
+    product_cols = {row[1] for row in con.execute("PRAGMA table_info(products)").fetchall()}
+    for col, definition in {"supplier_id": "INTEGER REFERENCES suppliers(id)", "supply_price": "INTEGER NOT NULL DEFAULT 0", "regulatory_class": "TEXT NOT NULL DEFAULT 'cosmetic'", "approval_status": "TEXT NOT NULL DEFAULT 'pending'"}.items():
+        if col not in product_cols:
+            con.execute(f"ALTER TABLE products ADD COLUMN {col} {definition}")
     product_existing = {row[1] for row in con.execute("PRAGMA table_info(products)").fetchall()}
     product_migrations = {
         "volume": "TEXT NOT NULL DEFAULT ''",
