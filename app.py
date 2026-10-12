@@ -478,6 +478,26 @@ def home():
     @media(max-width:650px){.topin{height:65px;padding:0 16px}.logo{font-size:25px}.logo small{font-size:8px}.desktop-cats{display:none}.header-cart{font-size:17px}.page{padding:0 12px 170px}.bo-hero{margin:0 -12px;padding:18px 18px;min-height:205px}.bo-hero:after{width:43%;right:-12%;opacity:.22}.bo-copy{max-width:88%}.bo-copy .kicker{font-size:11px}.bo-copy h1{font-size:clamp(26px,7vw,35px);line-height:1.17;margin:8px 0 12px}.bo-copy p{font-size:12px;margin-bottom:12px}.bo-copy .btn{padding:10px 15px;font-size:12px}.bo-cats{padding:13px 0;gap:6px}.bo-cats a{font-size:11px;padding:7px 11px}.bo-section{padding:0 0 120px}.bo-section h2{font-size:27px}.bo-section .lead{font-size:12px}.bo-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}.bo-grid .card,.bo-grid .card:nth-child(n+4){grid-column:span 1}.bo-grid .card:last-child:nth-child(odd){grid-column:span 2}.bo-grid .product-visual{aspect-ratio:1.12}.bo-grid .card-body{padding:9px}.bo-grid h3{font-size:13px}.bo-grid .price{font-size:16px}.bo-grid .badge{font-size:9px;padding:4px 6px;top:6px;left:6px}.bo-section .section-head{align-items:center}.bo-section .section-head>a{font-size:12px;white-space:nowrap}}
 .topin{justify-content:space-between}.topin .nav:before{content:"⌕";font-size:27px;margin-right:8px}.topin .logo{font-size:34px}.topin .logo small{font-size:10px}.bo-grid .card{box-shadow:0 1px 4px #39202b0b}.bo-grid .product-visual img{object-fit:cover;width:100%;height:100%}
 @media(max-width:650px){.topin .logo{font-size:25px}.topin .logo small{font-size:8px}.topin .nav:before{font-size:21px;margin-right:4px}.mobile-nav{bottom:calc(9px + env(safe-area-inset-bottom,0px));padding:7px 9px}.bo-grid .card:last-child:nth-child(odd){grid-column:span 2}.bo-grid .card:last-child:nth-child(odd) .product-visual{aspect-ratio:1.7}.bo-section .section-head{flex-direction:row;align-items:center;margin-bottom:11px}}
+
+    /* Reference storefront: compact left-aligned heading, continuous catalog and non-obscuring navigation */
+    .bo-section .section-head{display:flex!important;flex-direction:row!important;align-items:center!important;justify-content:space-between!important;text-align:left!important}
+    .bo-section .section-head>div{min-width:0}.bo-section h2{text-align:left!important}
+    .bo-section .section-head>a{margin:0!important;white-space:nowrap}
+    .bo-grid .card{display:block;text-align:left}.bo-grid .card-body{position:relative}
+    .bo-grid .price{display:flex;align-items:center;justify-content:space-between}
+    .bo-grid .price:after{content:"🛒";font-size:20px;background:#fbe9ec;padding:4px 9px;border-radius:9px}
+    .bo-hero:after{display:none}
+    .bo-hero{background:linear-gradient(90deg,#fff8f1,#f2e5e0);background-position:center;background-size:cover}
+    .bo-cats{justify-content:space-between}
+    @media(max-width:650px){
+      .bo-section .section-head{margin-bottom:12px!important}
+      .bo-section .section-head>a{font-size:12px!important}
+      .bo-section .lead{line-height:1.35}
+      .bo-grid .price:after{font-size:15px;padding:4px}
+      .mobile-nav{position:fixed!important;bottom:calc(12px + env(safe-area-inset-bottom,0px))!important;z-index:100!important}
+      .page{padding-bottom:calc(210px + env(safe-area-inset-bottom,0px))!important}
+      .bo-hero{min-height:220px}
+    }
     </style>
     <section class="bo-hero"><div class="bo-copy"><div class="kicker">건강한 두피가 아름다운 변화를 만듭니다</div><h1><em>두피</em>부터<br>다시 시작하는 아름다움</h1><p>보찌미가 제안하는<br>프리미엄 두피·모발 케어 솔루션</p><a class="btn" href="{{url_for('shop')}}">제품 보러가기　›</a></div></section>
     <nav class="bo-cats" aria-label="두피케어 카테고리"><a href="{{url_for('shop')}}">전체</a>{% for c in categories %}<a href="{{url_for('shop',category=c)}}">{{c}}</a>{% endfor %}</nav>
