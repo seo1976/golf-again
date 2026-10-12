@@ -245,7 +245,7 @@ def init_db():
             ("보찌미 스칼프 스케일러 (샘플)", "두피 스케일링", "두피 세정용 스케일러 콘셉트", 16900),
             ("보찌미 두피케어 듀오 (샘플)", "두피케어 세트", "샴푸와 미스트 세트 콘셉트", 36900),
         ]
-        for name, category, description, display_price in demos:
+        for demo_index, (name, category, description, display_price) in enumerate(demos):
             if not con.execute("SELECT 1 FROM products WHERE name=?", (name,)).fetchone():
                 con.execute("""INSERT INTO products
                     (name,category,short_desc,description,ingredients,usage,caution,price,sale_price,
@@ -253,8 +253,12 @@ def init_db():
                      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                     (name,category,description,
                      description + " · 실제 제조·공급사가 없는 화면 검토용 가상 상품입니다. 구매할 수 없습니다.",
-                     "미확정", "미확정", "실제 제품이 아닙니다.", display_price,None,0,"",
+                     "미확정", "미확정", "실제 제품이 아닙니다.", display_price,None,0,"/static/demo/" + ["shampoo","mist","serum","scaler","duo"][demo_index] + ".svg",
                      "DEMO · 판매불가","coming",1,now(),now(),"pending"))
+        # Update existing preview records created before illustrations were added.
+        for demo_index, (name, _, _, _) in enumerate(demos):
+            con.execute("UPDATE products SET image_url=? WHERE name=? AND status='coming'",
+                        ("/static/demo/" + ["shampoo","mist","serum","scaler","duo"][demo_index] + ".svg", name))
     con.commit()
     con.close()
 
