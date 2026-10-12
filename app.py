@@ -462,7 +462,7 @@ def page(title, body, **context):
 @app.route("/")
 def home():
     con = db()
-    products = con.execute("SELECT * FROM products WHERE status IN ('active','coming') ORDER BY featured DESC,id DESC LIMIT 6").fetchall()
+    products = con.execute("SELECT * FROM products WHERE status IN ('active','coming') ORDER BY featured DESC,id ASC LIMIT 5").fetchall()
     con.close()
     body = render_template_string("""
     <style>
@@ -485,15 +485,15 @@ def home():
     .bo-section .section-head>a{margin:0!important;white-space:nowrap}
     .bo-grid .card{display:block;text-align:left}.bo-grid .card-body{position:relative}
     .bo-grid .price{display:flex;align-items:center;justify-content:space-between}
-    .bo-grid .price:after{content:"🛒";font-size:20px;background:#fbe9ec;padding:4px 9px;border-radius:9px}
+    .bo-grid .price:after{content:"›";font-size:22px;font-weight:500;background:#fbe9ec;padding:1px 12px;border-radius:9px;color:#8f3453}
     .bo-hero:after{display:none}
     .bo-hero{background:linear-gradient(90deg,#fff8f1,#f2e5e0);background-position:center;background-size:cover}
-    .bo-cats{justify-content:space-between}
+    .bo-cats{justify-content:space-between}.bo-section .section-head{width:100%;gap:10px}.bo-section .section-head>a{flex:none}.bo-section .section-head .lead{margin:2px 0 0}.bo-grid .product-visual{background:#f8f1ed}
     @media(max-width:650px){
       .bo-section .section-head{margin-bottom:12px!important}
       .bo-section .section-head>a{font-size:12px!important}
       .bo-section .lead{line-height:1.35}
-      .bo-grid .price:after{font-size:15px;padding:4px}
+      .bo-grid .price:after{font-size:18px;padding:2px 9px}
       .mobile-nav{position:fixed!important;bottom:calc(12px + env(safe-area-inset-bottom,0px))!important;z-index:100!important}
       .page{padding-bottom:calc(210px + env(safe-area-inset-bottom,0px))!important}
       .bo-hero{min-height:220px}
@@ -502,7 +502,7 @@ def home():
     <section class="bo-hero"><div class="bo-copy"><div class="kicker">건강한 두피가 아름다운 변화를 만듭니다</div><h1><em>두피</em>부터<br>다시 시작하는 아름다움</h1><p>보찌미가 제안하는<br>프리미엄 두피·모발 케어 솔루션</p><a class="btn" href="{{url_for('shop')}}">제품 보러가기　›</a></div></section>
     <nav class="bo-cats" aria-label="두피케어 카테고리"><a href="{{url_for('shop')}}">전체</a>{% for c in categories %}<a href="{{url_for('shop',category=c)}}">{{c}}</a>{% endfor %}</nav>
     <section class="bo-section"><div class="section-head"><div><h2>BEST 제품</h2><p class="lead">보찌미 두피·모발 케어 상품 미리보기</p></div><a href="{{url_for('shop')}}">전체보기 ›</a></div>
-    {% if products %}<div class="bo-grid">{% for p in products %}<a class="card" href="{{url_for('product_detail',product_id=p['id'])}}"><div class="product-visual">{% if p['image_url'] %}<img src="{{p['image_url']}}" alt="{{p['name']}}" loading="lazy">{% else %}<div class="bottle">B</div>{% endif %}<span class="badge">DEMO · 판매불가</span></div><div class="card-body"><h3>{{p['name']}}</h3><span class="bo-tag">{{p['category']}}</span><span class="bo-tag">상품 준비중</span><div class="price">{{p['price']|won}}</div><div class="bo-demo">예시 가격 · 구매 불가</div></div></a>{% endfor %}</div>{% else %}<div class="empty">샘플 상품 준비 중입니다.</div>{% endif %}</section>
+    {% if products %}<div class="bo-grid">{% for p in products %}<a class="card" href="{{url_for('product_detail',product_id=p['id'])}}"><div class="product-visual">{% if p['image_url'] %}<img src="{{p['image_url']}}" alt="{{p['name']}}" loading="lazy">{% else %}<div class="bottle">B</div>{% endif %}<span class="badge">미리보기 · 판매 전</span></div><div class="card-body"><h3>{{p['name']}}</h3><span class="bo-tag">{{p['category']}}</span><span class="bo-tag">상품 준비중</span><div class="price">{{p['price']|won}}</div><div class="bo-demo">예시 가격 · 구매 불가</div></div></a>{% endfor %}</div>{% else %}<div class="empty">샘플 상품 준비 중입니다.</div>{% endif %}</section>
     """,products=products,categories=CATEGORIES)
     return page("두피·모발 전문 쇼핑몰",body)
 
