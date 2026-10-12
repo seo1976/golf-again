@@ -236,6 +236,25 @@ def init_db():
           "사용 중 또는 사용 후 이상 증상이 있으면 사용을 중지하고 전문가와 상담하세요.",
           0, None, 0, "", "COMING SOON", "coming", 1, now(), now()
         ))
+    # Preview-only fictional catalog. Never enable checkout for these items.
+    if APP_ENV == "development":
+        demos = [
+            ("보찌미 두피 밸런스 샴푸 (샘플)", "두피 샴푸", "두피를 산뜻하게 세정하는 샴푸 콘셉트", 18900),
+            ("보찌미 쿨링 스칼프 미스트 (샘플)", "두피 토닉·스프레이", "가벼운 사용감의 두피 미스트 콘셉트", 22900),
+            ("보찌미 수분 두피 세럼 (샘플)", "두피 세럼·앰플", "건조한 두피를 위한 보습 세럼 콘셉트", 27900),
+            ("보찌미 스칼프 스케일러 (샘플)", "두피 스케일링", "두피 세정용 스케일러 콘셉트", 16900),
+            ("보찌미 두피케어 듀오 (샘플)", "두피케어 세트", "샴푸와 미스트 세트 콘셉트", 36900),
+        ]
+        for name, category, description, display_price in demos:
+            if not con.execute("SELECT 1 FROM products WHERE name=?", (name,)).fetchone():
+                con.execute("""INSERT INTO products
+                    (name,category,short_desc,description,ingredients,usage,caution,price,sale_price,
+                     stock,image_url,badge,status,featured,created_at,updated_at,approval_status)
+                     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    (name,category,description,
+                     description + " · 실제 제조·공급사가 없는 화면 검토용 가상 상품입니다. 구매할 수 없습니다.",
+                     "미확정", "미확정", "실제 제품이 아닙니다.", display_price,None,0,"",
+                     "DEMO · 판매불가","coming",1,now(),now(),"pending"))
     con.commit()
     con.close()
 
