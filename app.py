@@ -465,13 +465,21 @@ def home():
     products = con.execute("SELECT * FROM products WHERE status IN ('active','coming') ORDER BY featured DESC,id DESC LIMIT 6").fetchall()
     con.close()
     body = render_template_string("""
-    <section class="hero"><div><div class="eyebrow">BOJJIMI × RUBIE</div><h1>나를 위한<br>정직한 아름다움</h1><p>자연유래 원료의 장점과 편안한 사용감을 함께 고민합니다. 과장된 약속 대신 확인된 정보와 섬세한 제품 경험을 전합니다.</p><div class="actions"><a class="btn" href="{{url_for('shop')}}">제품 만나보기</a><a class="btn ghost" href="{{url_for('brand')}}">루비에 이야기</a></div></div><div class="hero-art"><div><b>RUBIE</b><span>NATURAL BALANCE</span></div></div></section>
-    <section class="section"><div class="section-head"><div><div class="eyebrow">OUR PRODUCTS</div><h2>루비에 제품</h2><p class="lead">두피부터 피부까지, 매일 편안하게 사용할 제품을 준비합니다.</p></div><a class="btn ghost small" href="{{url_for('shop')}}">전체 보기</a></div>
-    {% if products %}<div class="grid">{% for p in products %}<a class="card" href="{{url_for('product_detail',product_id=p['id'])}}"><div class="product-visual">{% if p['image_url'] %}<img src="{{p['image_url']}}" alt="{{p['name']}}">{% else %}<div class="bottle">R</div>{% endif %}{% if p['badge'] %}<span class="badge">{{p['badge']}}</span>{% endif %}</div><div class="card-body"><div class="category">{{p['category']}}</div><h3>{{p['name']}}</h3><p class="muted">{{p['short_desc']}}</p>{% if p['status']=='active' %}<div class="price">{{(p['sale_price'] if p['sale_price'] is not none else p['price'])|won}}{% if p['sale_price'] is not none %}<span class="old-price">{{p['price']|won}}</span>{% endif %}</div>{% else %}<div class="price" style="color:var(--rose)">출시 준비 중</div>{% endif %}</div></a>{% endfor %}</div>{% else %}<div class="empty">첫 제품을 준비하고 있습니다.</div>{% endif %}</section>
-    <section class="section"><div class="values"><div class="value"><div class="num">01</div><h3>확인된 정보</h3><p class="muted">근거 없이 효능을 과장하지 않고 제품의 실제 역할을 분명하게 안내합니다.</p></div><div class="value"><div class="num">02</div><h3>편안한 사용감</h3><p class="muted">매일 손이 가는 향, 제형과 마무리감을 중요하게 생각합니다.</p></div><div class="value"><div class="num">03</div><h3>책임 있는 판매</h3><p class="muted">전성분, 사용법과 주의사항을 투명하게 공개합니다.</p></div></div></section>
-    <section class="section story"><div><div class="eyebrow" style="color:#e8b7c4">RUBIE STORY</div><h2>좋은 원료만큼<br>중요한 것은 균형입니다.</h2><p>루비에는 자연유래 원료를 맹목적으로 강조하지 않습니다. 안전성, 안정성, 사용감과 필요한 기능이 조화를 이루는 제품을 지향합니다.</p></div><div class="story-note"><b>현재 준비 중인 첫 제품</b><h3>보태니컬 두피 샴푸</h3><p>풍성한 거품과 만족스러운 향은 살리고, 세정 후 뻣뻣함을 줄이는 방향으로 정식 제품화를 준비하고 있습니다.</p></div></section>
-    """, products=products)
-    return page("루비에 공식 화장품몰", body)
+    <style>
+    .scalp-hero{min-height:360px;border-radius:20px;background:linear-gradient(115deg,#fff3ed,#e5d2cf);padding:48px 6%;display:flex;align-items:center;justify-content:space-between;gap:20px}
+    .scalp-hero h1{font:700 clamp(30px,5vw,56px) Georgia,serif;color:#4d2934;margin:12px 0}.scalp-hero p{color:#674e55}
+    .scalp-art{font-size:clamp(60px,12vw,130px);opacity:.65}.scalp-cats{display:flex;gap:9px;overflow-x:auto;padding:20px 0}
+    .scalp-cats a{white-space:nowrap;border:1px solid #e7d5d9;border-radius:30px;padding:9px 15px;background:#fff;font-size:13px}
+    .scalp-products{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:18px}.scalp-products .card h3{font-size:16px}.scalp-products .card-body{padding:14px}
+    @media(max-width:650px){.scalp-hero{min-height:300px;padding:26px 20px}.scalp-art{font-size:60px}.scalp-products{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.scalp-products .card-body{padding:10px}.scalp-products .card h3{font-size:14px}.scalp-products .price{font-size:15px}}
+    </style>
+    <section class="scalp-hero"><div><div class="eyebrow">BOJJIMI · SCALP & HAIR CARE</div><h1>두피부터<br>다시 시작하는 아름다움</h1><p>프리미엄 두피·모발 케어 제품을 한눈에 살펴보세요.</p><div class="actions"><a class="btn" href="{{url_for('shop')}}">제품 보러가기 →</a></div></div><div class="scalp-art" aria-hidden="true">🌿</div></section>
+    <nav class="scalp-cats" aria-label="두피케어 카테고리"><a href="{{url_for('shop')}}">전체</a>{% for c in categories %}<a href="{{url_for('shop',category=c)}}">{{c}}</a>{% endfor %}</nav>
+    <section class="section" style="padding-top:20px"><div class="section-head"><div><div class="eyebrow">BOJJIMI CURATION</div><h2>BEST 제품</h2><p class="lead">화면 확인용 가상 상품 · 판매하지 않습니다.</p></div><a href="{{url_for('shop')}}">전체보기 ›</a></div>
+    {% if products %}<div class="scalp-products">{% for p in products %}<a class="card" href="{{url_for('product_detail',product_id=p['id'])}}"><div class="product-visual">{% if p['image_url'] %}<img src="{{p['image_url']}}" alt="{{p['name']}}" loading="lazy">{% else %}<div class="bottle">B</div>{% endif %}<span class="badge">DEMO · 판매불가</span></div><div class="card-body"><div class="category">{{p['category']}}</div><h3>{{p['name']}}</h3><p class="muted" style="font-size:12px">{{p['short_desc']}}</p><div class="price">{{p['price']|won}} <span class="muted" style="font-size:11px;font-weight:400">예시가격</span></div></div></a>{% endfor %}</div>{% else %}<div class="empty">상품 준비 중입니다.</div>{% endif %}</section>
+    <section class="section"><div class="values"><div class="value"><div class="num">01</div><h3>두피 고민별 탐색</h3><p class="muted">필요한 제품을 카테고리별로 비교하세요.</p></div><div class="value"><div class="num">02</div><h3>투명한 상품 정보</h3><p class="muted">기능성 여부와 성분 정보를 구분합니다.</p></div><div class="value"><div class="num">03</div><h3>안전한 구매 준비</h3><p class="muted">공급사 검증 전 상품은 판매하지 않습니다.</p></div></div></section>
+    """, products=products, categories=CATEGORIES)
+    return page("두피·모발 전문 쇼핑몰", body)
 
 
 @app.route("/shop")
