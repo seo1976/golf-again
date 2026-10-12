@@ -462,7 +462,7 @@ def page(title, body, **context):
 @app.route("/")
 def home():
     con = db()
-    products = con.execute("SELECT * FROM products WHERE status IN ('active','coming') ORDER BY featured DESC,id ASC LIMIT 5").fetchall()
+    products = con.execute("SELECT * FROM products WHERE status IN ('active','coming') AND price > 0 ORDER BY featured DESC,id ASC LIMIT 5").fetchall()
     con.close()
     body = render_template_string("""
     <style>
@@ -498,6 +498,12 @@ def home():
       .page{padding-bottom:calc(210px + env(safe-area-inset-bottom,0px))!important}
       .bo-hero{min-height:220px}
     }
+
+    .bo-section .section-head{display:flex!important;flex-direction:row!important;align-items:center!important;justify-content:space-between!important;text-align:left!important}
+    .bo-section .section-head>div{flex:1;min-width:0}.bo-section .section-head>a{flex:none}
+    .bo-grid .card{overflow:hidden}.bo-grid .product-visual img{display:block;width:100%;height:100%;object-fit:cover}
+    .bo-hero{border-radius:0!important}.bo-hero:before{content:"";position:absolute;right:0;top:0;bottom:0;width:38%;background:linear-gradient(130deg,#ead8ce,#f7e9e2);opacity:.3}
+    @media(max-width:650px){.bo-hero{min-height:215px!important}.bo-hero:before{opacity:.12}.bo-section .section-head{margin-bottom:12px!important}.bo-grid .card:last-child:nth-child(odd){grid-column:span 2}.bo-grid .card:last-child:nth-child(odd) .product-visual{aspect-ratio:1.65}.mobile-nav{bottom:calc(12px + env(safe-area-inset-bottom,0px))!important;z-index:50!important}.page{padding-bottom:210px!important}}
     </style>
     <section class="bo-hero"><div class="bo-copy"><div class="kicker">건강한 두피가 아름다운 변화를 만듭니다</div><h1><em>두피</em>부터<br>다시 시작하는 아름다움</h1><p>보찌미가 제안하는<br>프리미엄 두피·모발 케어 솔루션</p><a class="btn" href="{{url_for('shop')}}">제품 보러가기　›</a></div></section>
     <nav class="bo-cats" aria-label="두피케어 카테고리"><a href="{{url_for('shop')}}">전체</a>{% for c in categories %}<a href="{{url_for('shop',category=c)}}">{{c}}</a>{% endfor %}</nav>
