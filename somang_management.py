@@ -55,7 +55,11 @@ def returns():
     require_admin()
     with db() as c:rows=c.execute("SELECT * FROM shop_return_drafts ORDER BY id DESC LIMIT 100").fetchall()
     body="<div class='warning'>반품·환불 업무 준비 화면입니다. 실제 주문번호 검증, 결제 취소, 재고 복구, 환불 송금은 실행하지 않습니다. 실제 고객 개인정보는 입력하지 마세요.</div><p><a href='/admin'>← 관리자</a> · <a href='/admin/members'>회원 관리</a> · <a href='/policy/returns'>정책 초안</a></p><div class='card'><h2>테스트 반품·환불 접수</h2><form method='post' action='/admin/returns'><input type='hidden' name='csrf' value='"+csrf()+"'><label>가상 접수번호 <input name='reference' maxlength='40' required placeholder='TEST-001'></label><label>유형 <select name='category'><option>반품</option><option>교환</option><option>환불</option></select></label><label>사유(개인정보 제외) <input name='reason' maxlength='200' required></label><button>테스트 접수 등록</button></form></div><div class='card'><h2>접수 목록</h2>"
-    for r in rows:body+="<p>#"+str(r["id"])+" · "+html.escape(r["reference"])+" · "+html.escape(r["category"])+" · "+html.escape(r["status"])+"<br><small>"+html.escape(r["reason"])+"</small></p>"
+    for r in rows:
+        body+="<div class='cart-line'><div><strong>#"+str(r["id"])+" · "+html.escape(r["reference"])+"</strong><p>"+html.escape(r["category"])+" · "+html.escape(r["status"])+"</p><small>"+html.escape(r["reason"])+"</small></div><form method='post' action='/admin/returns/"+str(r["id"])+"/status'><input type='hidden' name='csrf' value='"+csrf()+"'><label>처리 상태 <select name='status'>"
+        for status in ("접수 검토","증빙 확인","반품 대기","처리 보류","검토 완료"):
+            body+="<option value='"+status+"'"+(" selected" if r["status"]==status else "")+">"+status+"</option>"
+        body+="</select></label><button>상태 저장</button></form></div>"
     if not rows:body+="<p>접수된 테스트 건이 없습니다.</p>"
     return page("관리자 · 반품·환불 관리",body+"</div>")
 @manage.post("/admin/returns")
@@ -66,4 +70,14 @@ def return_create():
     category=request.form.get("category","")
     if not reference or not reason or category not in ("반품","교환","환불"):abort(400)
     with db() as c:c.execute("INSERT INTO shop_return_drafts(reference,category,reason) VALUES(?,?,?)",(reference,category,reason))
+    return redirect("/admin/returns")
+
+@manage.post("/admin/returns/<int:case_id>/status")
+def return_status(case_id):
+    require_admin();check()
+    status=request.form.get("status","")
+    if status not in ("접수 검토","증빙 확인","반품 대기","처리 보류","검토 완료"):abort(400)
+    with db() as c:
+        if not c.execute("SELECT 1 FROM shop_return_drafts WHERE id=?",(case_id,)).fetchone():abort(404)
+        c.execute("UPDATE shop_return_drafts SET status=? WHERE id=?",(status,case_id))
     return redirect("/admin/returns")
