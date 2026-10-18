@@ -70,6 +70,7 @@ def remove():
 def account():
     if session.get("member_id"):
         return page("내 계정","<div class='card'>로그인 상태입니다.<form method='post' action='/logout'><input type='hidden' name='csrf' value='"+csrf()+"'><button>로그아웃</button></form></div>")
+    if os.environ.get("SOMANG_ENABLE_DEMO_REGISTRATION")!="1":return page("회원가입 · 로그인","<div class=\'warning\'>회원가입과 로그인은 영구 데이터베이스 및 개인정보 보호 준비 전까지 비활성화되어 있습니다. 비회원 장바구니는 미리 볼 수 있습니다.</div>")
     return page("회원가입 · 로그인","<div class='warning'>현재는 개발 테스트 단계입니다. 실제 이메일이나 평소 사용하는 비밀번호를 입력하지 마세요. 무료 서버 재배포 시 회원 데이터가 삭제될 수 있습니다.</div><div class='card'><h2>회원가입</h2>"+auth_form("/register","가입하기")+"</div><div class='card'><h2>로그인</h2>"+auth_form("/login","로그인")+"</div>")
 def auth_form(action,label):
     return "<form action='"+action+"' method='post'><input type='hidden' name='csrf' value='"+csrf()+"'><label>테스트 이메일 <input type='email' name='email' maxlength='150' required></label><label>비밀번호 (12자 이상) <input type='password' name='password' minlength='12' required></label><button>"+label+"</button></form>"
@@ -80,6 +81,7 @@ def credentials():
     return email,pw
 @shop.post("/register")
 def register():
+    if os.environ.get("SOMANG_ENABLE_DEMO_REGISTRATION")!="1":abort(503,"회원가입은 영구 DB 준비 후 활성화합니다.")
     check();email,pw=credentials()
     try:
         with db() as c:
@@ -92,6 +94,7 @@ def register():
     return redirect("/account")
 @shop.post("/login")
 def login():
+    if os.environ.get("SOMANG_ENABLE_DEMO_REGISTRATION")!="1":abort(503,"회원 로그인은 영구 DB 준비 후 활성화합니다.")
     check();email,pw=credentials()
     with db() as c:r=c.execute("SELECT id,password_hash FROM shop_members WHERE email=?",(email,)).fetchone()
     if not r or not check_password_hash(r["password_hash"],pw):
