@@ -23,7 +23,7 @@ def csrf():
 def check():
     if not session.get("csrf") or not hmac.compare_digest(session["csrf"],request.form.get("csrf","")):abort(400)
 def page(title,body):
-    return "<!doctype html><html lang='ko'><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>"+esc(title)+" | 소망약국</title><style>body{font-family:system-ui,sans-serif;margin:0;background:#f5faf6;color:#214435}header{background:white;padding:18px 5%;display:flex;justify-content:space-between;flex-wrap:wrap;gap:12px}a{color:#287054}main{max-width:800px;margin:30px auto;padding:16px}.card{background:white;padding:23px;margin:16px 0;border:1px solid #dbe8df;border-radius:14px}label{display:block;margin:14px 0}input{padding:10px;border:1px solid #cadad0;border-radius:7px;max-width:90%}button,.btn{background:#267257;color:white;border:0;padding:11px 15px;border-radius:8px;cursor:pointer;display:inline-block;text-decoration:none}small{color:#68776e}.warning{background:#fff1d9;padding:15px;border-radius:10px}form{margin:10px 0}.demo-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.product-card{padding:0;overflow:hidden;margin:0}.product-art{height:110px;background:#e9f3eb;display:grid;place-items:center;font-size:48px}.product-info{padding:15px}.product-info h2{font-size:18px}.product-info p{font-size:13px}.product-info input{width:70px}.product-info button{width:100%}@media(max-width:520px){main{margin:8px auto;padding:12px}.demo-grid{gap:8px}.product-art{height:85px;font-size:39px}.product-info{padding:10px}.product-info h2{font-size:15px}.product-info p{font-size:12px}}</style><header><strong><a href='/'>✚ 소망약국</a></strong><nav><a href='/shop'>상품</a>　<a href='/cart'>장바구니</a>　<a href='/account'>회원</a></nav></header><main><h1>"+esc(title)+"</h1>"+body+"</main>"
+    return "<!doctype html><html lang='ko'><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>"+esc(title)+" | 소망약국</title><style>body{font-family:system-ui,sans-serif;margin:0;background:#f5faf6;color:#214435}header{background:white;padding:18px 5%;display:flex;justify-content:space-between;flex-wrap:wrap;gap:12px}a{color:#287054}main{max-width:800px;margin:30px auto;padding:16px}.card{background:white;padding:23px;margin:16px 0;border:1px solid #dbe8df;border-radius:14px}label{display:block;margin:14px 0}input{padding:10px;border:1px solid #cadad0;border-radius:7px;max-width:90%}button,.btn{background:#267257;color:white;border:0;padding:11px 15px;border-radius:8px;cursor:pointer;display:inline-block;text-decoration:none}small{color:#68776e}.warning{background:#fff1d9;padding:15px;border-radius:10px}form{margin:10px 0}.demo-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.product-card{padding:0;overflow:hidden;margin:0}.product-art{height:110px;background:#e9f3eb;display:grid;place-items:center;font-size:48px}.product-info{padding:15px}.product-info h2{font-size:18px}.product-info p{font-size:13px}.product-info input{width:70px}.product-info button{width:100%}@media(max-width:520px){main{margin:8px auto;padding:12px}.demo-grid{gap:8px}.product-art{height:85px;font-size:39px}.product-info{padding:10px}.product-info h2{font-size:15px}.product-info p{font-size:12px}} .cart-line{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:14px 0;border-bottom:1px solid #e5eee7}.cart-line p{margin:5px 0;font-size:13px}.cart-controls{display:flex;align-items:end;gap:8px}.cart-controls form{display:flex;align-items:end;gap:6px}.cart-controls label{font-size:12px;margin:0}.cart-controls input{width:62px}.cart-controls button{padding:9px}.cart-controls .subtle{background:#f0f3f0;color:#355e48}@media(max-width:550px){.cart-line{align-items:stretch;flex-direction:column}.cart-controls{justify-content:space-between}} </style><header><strong><a href='/'>✚ 소망약국</a></strong><nav><a href='/shop'>상품</a>　<a href='/cart'>장바구니</a>　<a href='/account'>회원</a></nav></header><main><h1>"+esc(title)+"</h1>"+body+"</main>"
 def product_rows():
     with db() as c:return [dict(r) for r in c.execute("SELECT id,name,category,description,price,stock FROM products WHERE approved=1 AND visible=1 AND stock>0 ORDER BY id DESC LIMIT 100")]
 @shop.get("/shop")
@@ -64,9 +64,27 @@ def cart():
     rows,total=contents()
     body="<div class='warning'>체험용 장바구니 · 실제 결제 불가</div><p><a href='/shop'>← 상품 더 보기</a></p><div class='card'>"
     for p in rows:
-        body+="<p>"+esc(p["name"])+" · "+str(p["quantity"])+"개 · "+f'{p["price"]*p["quantity"]:,}'+"원 <form action='/cart/remove' method='post'><input type='hidden' name='csrf' value='"+csrf()+"'><input type='hidden' name='product_id' value='"+str(p["id"])+"'><button>삭제</button></form></p>"
-    body+="<h2>합계 "+f'{total:,}'+"원</h2>"+("<a class='btn' href='/checkout'>결제 전 주문 확인</a>" if rows else "<p>장바구니가 비어 있습니다.</p>")+"</div>"
+        body+="<div class='cart-line'><div><strong>"+esc(p["name"])+"</strong><p>단가 "+f'{p["price"]:,}'+"원 · 소계 "+f'{p["price"]*p["quantity"]:,}'+"원</p></div><div class='cart-controls'><form action='/cart/update' method='post'><input type='hidden' name='csrf' value='"+csrf()+"'><input type='hidden' name='product_id' value='"+str(p["id"])+"'><label>수량 <input type='number' name='quantity' min='0' max='20' value='"+str(p["quantity"])+"'></label><button>변경</button></form><form action='/cart/remove' method='post'><input type='hidden' name='csrf' value='"+csrf()+"'><input type='hidden' name='product_id' value='"+str(p["id"])+"'><button class='subtle'>삭제</button></form></div></div>"
+    body+="<h2>예상 상품 합계 "+f'{total:,}'+"원</h2><p><small>배송비 미포함 · 실제 판매가가 아닙니다.</small></p>"+("<a class='btn' href='/checkout'>결제 전 주문 확인 →</a>" if rows else "<p>장바구니가 비어 있습니다.</p><a class='btn' href='/shop'>상품 둘러보기</a>")+"</div>"
     return page("장바구니",body)
+@shop.post("/cart/update")
+def update_cart():
+    check()
+    try:pid=int(request.form.get("product_id",""));qty=int(request.form.get("quantity",""))
+    except (ValueError,TypeError):abort(400)
+    if qty<0 or qty>20:abort(400)
+    cart=dict(session.get("cart",{}))
+    if str(pid) not in cart:abort(404)
+    if qty==0:cart.pop(str(pid),None)
+    else:
+        if pid in DEMO_BY_ID:stock=DEMO_BY_ID[pid]["stock"]
+        else:
+            with db() as c:p=c.execute("SELECT stock FROM products WHERE id=? AND approved=1 AND visible=1",(pid,)).fetchone()
+            if p is None:abort(404)
+            stock=p["stock"]
+        cart[str(pid)]=min(qty,stock)
+    session["cart"]=cart
+    return redirect("/cart")
 @shop.post("/cart/remove")
 def remove():
     check();cart=dict(session.get("cart",{}));cart.pop(request.form.get("product_id",""),None);session["cart"]=cart
