@@ -32,5 +32,21 @@ BEGIN
    RAISE EXCEPTION 'Fake order cancel smoke test failed';
  END IF;
 END $$;
+-- Verify the draft schema removes saved address PII on hard member deletion.
+-- A separate synthetic member avoids order-item retention FK constraints.
+INSERT INTO members (email,password_hash,status)
+VALUES ('ci-address-cleanup@example.invalid','fake-hash-not-a-password','pending');
+INSERT INTO somang_shipping_addresses
+ (member_id,recipient_name,recipient_phone,postal_code,address_line1)
+SELECT id,'가상 주소 수령인','000-0000-0000','00000','가상 주소'
+FROM members WHERE email='ci-address-cleanup@example.invalid';
+DELETE FROM members WHERE email='ci-address-cleanup@example.invalid';
+DO $
+BEGIN
+ IF EXISTS (SELECT 1 FROM somang_shipping_addresses
+            WHERE recipient_name='가상 주소 수령인') THEN
+   RAISE EXCEPTION 'Orphaned saved shipping address after hard member deletion';
+ END IF;
+END $;
 -- No synthetic order persists after this test.
 ROLLBACK;
