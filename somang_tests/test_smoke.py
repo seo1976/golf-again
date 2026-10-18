@@ -40,4 +40,30 @@ class SomangSmokeTests(unittest.TestCase):
         with __import__("somang_preview").db() as c:
             c.execute("INSERT INTO products(name,category,price,stock,approved,visible) VALUES(?,?,?,?,?,?)",("TEST MEDICINE","일반의약품",100,3,0,0))
         self.assertNotIn(b"TEST MEDICINE",self.client.get("/shop").data)
+    def test_inventory_adjustment_and_audit(self):
+        import somang_preview
+        os.environ["SOMANG_ADMIN_PASSWORD"]="unit-test-only-password"
+        os.environ["SOMANG_SECRET_KEY"]="unit-test-only-secret"
+        try:
+            with somang_preview.db() as c:
+                cur=c.execute("INSERT INTO products(name,category,price,stock,approved,visible) VALUES(?,?,?,?,?,?)",("Inventory Test","화장품",1000,5,0,0))
+                pid=cur.lastrowid
+            with self.client.session_transaction() as sess:
+                sess["admin"]=True
+                sess["csrf"]="test-token"
+            r=self.client.post("/admin/ops/stock/adjust",data={"csrf":"test-token","product_id":pid,"change_qty":3,"reason":"test inbound"})
+            self.assertEqual(r.status_code,302)
+            with somang_preview.db() as c:
+                self.assertEqual(c.execute("SELECT stock FROM products WHERE id=?",(pid,)).fetchone()[0],8)
+                self.assertEqual(c.execute("SELECT change_qty FROM stock_movements WHERE product_id=?",(pid,)).fetchone()[0],3)
+            r=self.client.post(f"/admin/products/{pid}/stock",data={"csrf":"test-token","stock":2})
+            self.assertEqual(r.status_code,302)
+            with somang_preview.db() as c:
+                self.assertEqual(c.execute("SELECT stock FROM products WHERE id=?",(pid,)).fetchone()[0],2)
+                self.assertEqual(c.execute("SELECT COUNT(*) FROM stock_movements WHERE product_id=?",(pid,)).fetchone()[0],2)
+            r=self.client.post("/admin/ops/stock/adjust",data={"csrf":"test-token","product_id":pid,"change_qty":-100,"reason":"invalid"})
+            self.assertEqual(r.status_code,400)
+        finally:
+            os.environ.pop("SOMANG_ADMIN_PASSWORD",None)
+            os.environ.pop("SOMANG_SECRET_KEY",None)
 if __name__=="__main__":unittest.main()
