@@ -33,7 +33,8 @@ def new_test_db():
 
 def save_sample_order(conn, number, items, shipping_fee):
     # Fixed fictional merchandise; no customer details or payment.
-    if not items or shipping_fee < 0:
+    if (not items or shipping_fee < 0 or
+            any(qty <= 0 or price < 0 or not name.strip() for name, qty, price in items)):
         raise ValueError("Invalid order")
     total = sum(qty * price for _, qty, price in items)
     with conn:
@@ -80,7 +81,7 @@ class OfflineOrderLifecycleTests(unittest.TestCase):
         self.assertEqual(self.db.execute("SELECT COUNT(*) FROM order_items").fetchone()[0], 1)
 
     def test_invalid_line_item_rolls_back_order(self):
-        with self.assertRaises(sqlite3.IntegrityError):
+        with self.assertRaises(ValueError):
             save_sample_order(self.db, "SAMPLE-004", [("샘플", 0, 1000)], 0)
         self.assertEqual(self.db.execute("SELECT COUNT(*) FROM orders").fetchone()[0], 0)
 
