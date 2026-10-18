@@ -1,6 +1,8 @@
 """Fail-closed tests for dormant member order queries. No real DB or PII."""
 import os
 import unittest
+import sys
+import types
 from unittest.mock import patch, MagicMock
 import somang_order_store as store
 
@@ -41,7 +43,9 @@ class OrderAccessTests(unittest.TestCase):
         conn.cursor.return_value.__enter__.return_value = cursor
         with patch.dict(os.environ, {"SOMANG_ENABLE_ORDER_READS": "1",
                                      "SOMANG_ORDER_PRIVACY_APPROVED": "1"}):
-            with patch("somang_member_store.connect", return_value=conn):
+            fake_store = types.ModuleType("somang_member_store")
+            fake_store.connect = lambda: conn
+            with patch.dict(sys.modules, {"somang_member_store": fake_store}):
                 self.assertEqual(store.list_member_orders(42, 5), [("FAKE-001",)])
                 sql, args = cursor.execute.call_args.args
                 self.assertIn("o.member_id=%s", sql)
