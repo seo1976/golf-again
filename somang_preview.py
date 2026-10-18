@@ -87,3 +87,6 @@ app.register_blueprint(ops)
 
 from somang_shop import shop
 app.register_blueprint(shop)
+
+from somang_payment import payment
+app.register_blueprint(payment)
