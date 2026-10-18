@@ -120,3 +120,58 @@ def schema_ready():
                 return cur.fetchone()[0] is not None
     except Exception:
         return False
+
+
+def reset_password_with_token(token, new_password):
+    """Consume reset token and change password in one transaction."""
+    if not 12 <= len(new_password) <= 200:
+        raise ValueError("Password length must be between 12 and 200")
+    digest = hashlib.sha256(token.encode()).hexdigest()
+    new_hash = generate_password_hash(new_password)
+    with connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE member_email_tokens SET consumed_at=now() "
+                "WHERE token_digest=%s AND purpose='reset' AND consumed_at IS NULL "
+                "AND expires_at>now() RETURNING member_id",
+                (digest,),
+            )
+            row = cur.fetchone()
+            if not row:
+                return False
+            cur.execute(
+                "UPDATE members SET password_hash=%s,updated_at=now() "
+                "WHERE id=%s AND status='active' AND email_verified_at IS NOT NULL "
+                "RETURNING id",
+                (new_hash, row[0]),
+            )
+            if not cur.fetchone():
+                raise ValueError("Account is not eligible for password reset")
+            cur.execute(
+                "UPDATE member_email_tokens SET consumed_at=now() "
+                "WHERE member_id=%s AND purpose='reset' AND consumed_at IS NULL",
+                (row[0],),
+            )
+    return True
+
+
+def delete_member(member_id, password):
+    """Require password confirmation and anonymize account identity."""
+    with connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT password_hash,status FROM members WHERE id=%s FOR UPDATE",
+                (member_id,),
+            )
+            row = cur.fetchone()
+            if not row or row[1] != "active" or not check_password_hash(row[0], password):
+                return False
+            cur.execute(
+                "DELETE FROM member_email_tokens WHERE member_id=%s", (member_id,)
+            )
+            cur.execute(
+                "UPDATE members SET email=%s,password_hash=%s,status='deleted',"
+                "deleted_at=now(),updated_at=now() WHERE id=%s",
+                (f"deleted-{member_id}@invalid.local", generate_password_hash(secrets.token_urlsafe(48)), member_id),
+            )
+    return True
