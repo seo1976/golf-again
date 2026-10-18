@@ -183,4 +183,10 @@ def lots():
         products=c.execute("SELECT id,name FROM products WHERE category NOT LIKE '%의약품%' ORDER BY id DESC LIMIT 100").fetchall()
     fields="<select name='product_id'>"+''.join("<option value='"+str(p['id'])+"'>"+esc(p['name'])+"</option>" for p in products)+"</select><input name='lot_code' required maxlength='60' placeholder='로트번호'><input name='expiry_date' type='date' required><input name='quantity' type='number' min='1' required placeholder='입고 수량'>"
     body="<div class='box'><h2>로트·유통기한 입고 (개발용)</h2><p>의약품이 아닌 품목에 한정합니다. 일반 재고와 로트 재고는 아직 출고 배분이 연결되지 않았습니다.</p>"+form("/admin/ops/lots/receive",fields,"로트 입고")+"</div><div class='box'><h2>유통기한순 재고</h2>"+''.join("<p>"+esc(r['name'])+" · "+esc(r['lot_code'])+" · "+esc(r['expiry_date'])+" · "+str(r['quantity'])+"개</p>" for r in rows)+"</div>"
+    import datetime
+    today=datetime.date.today()
+    cutoff=today+datetime.timedelta(days=30)
+    expired=[r for r in rows if r["expiry_date"]<today.isoformat()]
+    soon=[r for r in rows if today.isoformat()<=r["expiry_date"]<=cutoff.isoformat()]
+    body="<div class='box'><h2>유통기한 주의</h2><p>기한 경과 "+str(len(expired))+"건 · 30일 이내 "+str(len(soon))+"건</p><p>경과 품목은 판매 가능 상태를 별도로 확인해야 합니다. 현재 자동 판매 차단은 미구현입니다.</p></div>"+body
     return layout("로트·유통기한",body)
