@@ -15,6 +15,7 @@ def init():
         CREATE TABLE IF NOT EXISTS ledger(id INTEGER PRIMARY KEY,kind TEXT NOT NULL,amount INTEGER NOT NULL,description TEXT NOT NULL,reference TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);
         CREATE TABLE IF NOT EXISTS stock_movements(id INTEGER PRIMARY KEY,product_id INTEGER NOT NULL,change_qty INTEGER NOT NULL,reason TEXT NOT NULL,created_at TEXT DEFAULT CURRENT_TIMESTAMP);
         CREATE TABLE IF NOT EXISTS inventory_lots(id INTEGER PRIMARY KEY,product_id INTEGER NOT NULL,lot_code TEXT NOT NULL,expiry_date TEXT NOT NULL,quantity INTEGER NOT NULL DEFAULT 0 CHECK(quantity>=0),created_at TEXT DEFAULT CURRENT_TIMESTAMP,UNIQUE(product_id,lot_code,expiry_date));
+        CREATE TABLE IF NOT EXISTS inventory_disposals(id INTEGER PRIMARY KEY,lot_id INTEGER NOT NULL,product_id INTEGER NOT NULL,quantity INTEGER NOT NULL,reason TEXT NOT NULL,created_at TEXT DEFAULT CURRENT_TIMESTAMP);
         CREATE TABLE IF NOT EXISTS ops_audit(id INTEGER PRIMARY KEY,action TEXT NOT NULL,details TEXT NOT NULL,created_at TEXT DEFAULT CURRENT_TIMESTAMP);
         """)
 init()
@@ -192,6 +193,10 @@ def lots():
     options="".join("<option value='"+str(r["id"])+"'>"+esc(r["name"])+" / "+esc(r["lot_code"])+" / "+esc(r["expiry_date"])+" ("+str(r["quantity"])+"개)</option>" for r in rows if r["quantity"]>0 and r["expiry_date"]>=today.isoformat())
     if options:
         body+="<div class='box'><h2>로트별 출고 (개발용)</h2><p>유통기한이 지난 로트는 선택할 수 없으며 서버에서도 출고를 거부합니다. 실제 판매 주문과는 연결되지 않습니다.</p>"+form("/admin/ops/lots/dispatch","<select name='lot_id'>"+options+"</select><input type='number' name='quantity' min='1' required placeholder='출고 수량'>","로트 출고")+"</div>"
+    dispose_options="".join("<option value='"+str(r["id"])+"'>"+esc(r["name"])+" / "+esc(r["lot_code"])+" ("+str(r["quantity"])+"개)</option>" for r in rows if r["quantity"]>0)
+    if dispose_options:
+        fields="<select name='lot_id'>"+dispose_options+"</select><input type='number' name='quantity' min='1' required placeholder='폐기 수량'><input name='reason' required maxlength='120' placeholder='폐기 사유'>"
+        body+="<div class='box'><h2>로트 폐기 기록 (개발용)</h2><p>유통기한 경과 등 폐기 사유를 기록하고 재고를 차감합니다. 실제 폐기 절차를 대체하지 않습니다.</p>"+form("/admin/ops/lots/dispose",fields,"폐기 기록")+"</div>"
     return layout("로트·유통기한",body)
 
 @ops.post("/lots/dispatch")
@@ -216,4 +221,28 @@ def dispatch_lot():
         c.execute("UPDATE products SET stock=stock-? WHERE id=?",(qty,lot["product_id"]))
         c.execute("INSERT INTO stock_movements(product_id,change_qty,reason) VALUES(?,?,?)",(lot["product_id"],-qty,f"LOT {lot['lot_code']} demo dispatch"))
         audit(c,"lot.dispatch",f"lot={lot_id},qty={qty}")
+    return redirect("/admin/ops/lots")
+
+@ops.post("/lots/dispose")
+def dispose_lot():
+    """Write off a lot with reason and inventory audit; demo only."""
+    guard(True)
+    try:
+        lot_id=int(request.form.get("lot_id",""))
+        qty=int(request.form.get("quantity",""))
+    except (ValueError,TypeError):abort(400)
+    reason=request.form.get("reason","").strip()[:120]
+    if not reason or qty<=0 or qty>100000:abort(400)
+    with conn() as c:
+        c.execute("BEGIN IMMEDIATE")
+        lot=c.execute("SELECT id,product_id,quantity,lot_code FROM inventory_lots WHERE id=?",(lot_id,)).fetchone()
+        if lot is None:abort(404)
+        if lot["quantity"]<qty:abort(409,"로트 재고 부족")
+        product=c.execute("SELECT stock FROM products WHERE id=?",(lot["product_id"],)).fetchone()
+        if product is None or product["stock"]<qty:abort(409,"상품 재고 부족")
+        c.execute("UPDATE inventory_lots SET quantity=quantity-? WHERE id=?",(qty,lot_id))
+        c.execute("UPDATE products SET stock=stock-? WHERE id=?",(qty,lot["product_id"]))
+        c.execute("INSERT INTO inventory_disposals(lot_id,product_id,quantity,reason) VALUES(?,?,?,?)",(lot_id,lot["product_id"],qty,reason))
+        c.execute("INSERT INTO stock_movements(product_id,change_qty,reason) VALUES(?,?,?)",(lot["product_id"],-qty,f"LOT {lot['lot_code']} disposal: {reason}"))
+        audit(c,"lot.disposal",f"lot={lot_id},qty={qty},reason={reason}")
     return redirect("/admin/ops/lots")
