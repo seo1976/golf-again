@@ -41,7 +41,7 @@ STORE_INFO = {
     "privacy_officer": os.environ.get("PRIVACY_OFFICER", "").strip(),
 }
 
-CATEGORIES = ["두피·헤어", "페이스", "바디", "천연오일", "세트"]
+CATEGORIES = ["탈모 증상 완화", "두피 샴푸", "두피 토닉·스프레이", "두피 세럼·앰플", "두피 스케일링", "모발 영양", "두피케어 세트"]
 ORDER_STATUSES = ["결제대기", "결제완료", "상품준비", "배송중", "배송완료", "취소", "환불완료"]
 PAYMENT_STATUSES = {"READY", "PAID", "FAILED", "CANCELED"}
 PRODUCT_REQUIRED_FIELDS = {
@@ -104,7 +104,7 @@ def valid_phone(value):
 
 
 def is_product_sellable(product):
-    return product and product["status"] == "active" and not product_missing_fields(product)
+    return product and product["status"] == "active" and not product_missing_fields(product) and (("approval_status" not in product.keys()) or product["approval_status"] == "approved")
 
 
 def init_db():
@@ -114,6 +114,24 @@ def init_db():
       id INTEGER PRIMARY KEY AUTOINCREMENT, email TEXT UNIQUE NOT NULL,
       password_hash TEXT NOT NULL, name TEXT NOT NULL, phone TEXT NOT NULL DEFAULT '',
       role TEXT NOT NULL DEFAULT 'customer', created_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS suppliers(
+      id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE,
+      contact_email TEXT NOT NULL DEFAULT '', contact_phone TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'pending', created_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS supplier_users(
+      supplier_id INTEGER NOT NULL, user_id INTEGER NOT NULL UNIQUE,
+      PRIMARY KEY(supplier_id,user_id),
+      FOREIGN KEY(supplier_id) REFERENCES suppliers(id),
+      FOREIGN KEY(user_id) REFERENCES users(id)
+    );
+    CREATE TABLE IF NOT EXISTS supplier_settlements(
+      id INTEGER PRIMARY KEY AUTOINCREMENT, supplier_id INTEGER NOT NULL,
+      order_item_id INTEGER NOT NULL UNIQUE, supply_amount INTEGER NOT NULL DEFAULT 0,
+      status TEXT NOT NULL DEFAULT 'pending', created_at TEXT NOT NULL,
+      FOREIGN KEY(supplier_id) REFERENCES suppliers(id),
+      FOREIGN KEY(order_item_id) REFERENCES order_items(id)
     );
     CREATE TABLE IF NOT EXISTS products(
       id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, category TEXT NOT NULL,
@@ -177,6 +195,10 @@ def init_db():
     for column, definition in migrations.items():
         if column not in existing:
             con.execute(f"ALTER TABLE orders ADD COLUMN {column} {definition}")
+    product_cols = {row[1] for row in con.execute("PRAGMA table_info(products)").fetchall()}
+    for col, definition in {"supplier_id": "INTEGER REFERENCES suppliers(id)", "supply_price": "INTEGER NOT NULL DEFAULT 0", "regulatory_class": "TEXT NOT NULL DEFAULT 'cosmetic'", "approval_status": "TEXT NOT NULL DEFAULT 'pending'"}.items():
+        if col not in product_cols:
+            con.execute(f"ALTER TABLE products ADD COLUMN {col} {definition}")
     product_existing = {row[1] for row in con.execute("PRAGMA table_info(products)").fetchall()}
     product_migrations = {
         "volume": "TEXT NOT NULL DEFAULT ''",
@@ -214,6 +236,29 @@ def init_db():
           "사용 중 또는 사용 후 이상 증상이 있으면 사용을 중지하고 전문가와 상담하세요.",
           0, None, 0, "", "COMING SOON", "coming", 1, now(), now()
         ))
+    # Preview-only fictional catalog. Never enable checkout for these items.
+    if APP_ENV == "development":
+        demos = [
+            ("보찌미 두피 밸런스 샴푸 (샘플)", "두피 샴푸", "두피를 산뜻하게 세정하는 샴푸 콘셉트", 18900),
+            ("보찌미 쿨링 스칼프 미스트 (샘플)", "두피 토닉·스프레이", "가벼운 사용감의 두피 미스트 콘셉트", 22900),
+            ("보찌미 수분 두피 세럼 (샘플)", "두피 세럼·앰플", "건조한 두피를 위한 보습 세럼 콘셉트", 27900),
+            ("보찌미 스칼프 스케일러 (샘플)", "두피 스케일링", "두피 세정용 스케일러 콘셉트", 16900),
+            ("보찌미 두피케어 듀오 (샘플)", "두피케어 세트", "샴푸와 미스트 세트 콘셉트", 36900),
+        ]
+        for demo_index, (name, category, description, display_price) in enumerate(demos):
+            if not con.execute("SELECT 1 FROM products WHERE name=?", (name,)).fetchone():
+                con.execute("""INSERT INTO products
+                    (name,category,short_desc,description,ingredients,usage,caution,price,sale_price,
+                     stock,image_url,badge,status,featured,created_at,updated_at,approval_status)
+                     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    (name,category,description,
+                     description + " · 실제 제조·공급사가 없는 화면 검토용 가상 상품입니다. 구매할 수 없습니다.",
+                     "미확정", "미확정", "실제 제품이 아닙니다.", display_price,None,0,"/static/demo/" + ["shampoo","mist","serum","scaler","duo"][demo_index] + ".svg",
+                     "DEMO · 판매불가","coming",1,now(),now(),"pending"))
+        # Update existing preview records created before illustrations were added.
+        for demo_index, (name, _, _, _) in enumerate(demos):
+            con.execute("UPDATE products SET image_url=? WHERE name=? AND status='coming'",
+                        ("/static/demo/" + ["shampoo","mist","serum","scaler","duo"][demo_index] + ".svg", name))
     con.commit()
     con.close()
 
@@ -381,7 +426,7 @@ def cart_data():
 
 BASE = """
 <!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="description" content="RUBIE 자연유래 화장품을 만나는 보찌미 공식몰"><meta name="csrf-token" content="{{csrf_token}}"><meta property="og:title" content="{{title}} | BOJJIMI"><meta property="og:description" content="RUBIE 자연유래 화장품 공식몰"><title>{{title}} | BOJJIMI</title>
+<meta name="description" content="보찌미 두피·모발 전문 케어 쇼핑몰"><meta name="csrf-token" content="{{csrf_token}}"><meta property="og:title" content="{{title}} | BOJJIMI"><meta property="og:description" content="보찌미 두피·모발 케어 전문몰"><title>{{title}} | BOJJIMI</title>
 <style>
 *{box-sizing:border-box}:root{--rose:#a44b64;--deep:#4d2934;--blush:#f8edf0;--cream:#fffaf6;--line:#eadde0;--ink:#30272a;--muted:#74686c;--white:#fff}
 html{scroll-behavior:smooth}body{margin:0;background:var(--cream);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans KR",Arial,sans-serif;line-height:1.58}a{text-decoration:none;color:inherit}button,input,select,textarea{font:inherit}
@@ -401,9 +446,9 @@ footer{background:#2e2025;color:#d9ccd0;padding:46px 22px}.footerin{max-width:11
 @media(max-width:520px){.grid,.values{grid-template-columns:1fr}.hero h1{font-size:36px}.hero-art b{font-size:42px}.detail h1{font-size:34px}.section-head{align-items:start;flex-direction:column}.formbox{padding:22px 18px}}
 </style></head><body>
 <div class="announcement">자연에서 찾은 균형 · 정직하게 확인된 정보만 전합니다</div>
-<header class="top"><div class="topin"><a class="logo" href="{{url_for('home')}}">BOJJIMI<small>RUBIE COSMETICS</small></a><nav class="nav"><a class="hide-m" href="{{url_for('shop')}}">제품</a><a class="hide-m" href="{{url_for('brand')}}">브랜드</a>{% if user %}<a class="hide-m" href="{{url_for('mypage')}}">마이페이지</a>{% if user['role']=='admin' %}<a href="{{url_for('admin')}}">관리자</a>{% endif %}<a class="hide-m" href="{{url_for('logout')}}">로그아웃</a>{% else %}<a class="hide-m" href="{{url_for('order_lookup')}}">비회원 주문조회</a><a class="hide-m" href="{{url_for('login')}}">로그인</a>{% endif %}<a href="{{url_for('cart')}}">장바구니 <span class="cart-count">{{cart_count}}</span></a></nav></div></header>
+<header class="top"><div class="topin"><a class="logo" href="{{url_for('home')}}">BOJJIMI<small>SCALP &amp; HAIR CARE</small></a><nav class="nav"><a class="hide-m" href="{{url_for('shop')}}">제품</a><a class="hide-m" href="{{url_for('brand')}}">브랜드</a>{% if user %}<a class="hide-m" href="{{url_for('mypage')}}">마이페이지</a>{% if user['role']=='admin' %}<a href="{{url_for('admin')}}">관리자</a>{% endif %}<a class="hide-m" href="{{url_for('logout')}}">로그아웃</a>{% else %}<a class="hide-m" href="{{url_for('order_lookup')}}">비회원 주문조회</a><a class="hide-m" href="{{url_for('login')}}">로그인</a>{% endif %}<a class="header-cart" href="{{url_for('cart')}}" aria-label="장바구니">🛒 <span class="cart-count">{{cart_count}}</span></a></nav></div><nav class="desktop-cats"><a href="{{url_for('home')}}">홈</a><a href="{{url_for('shop')}}">제품</a><a href="{{url_for('brand')}}">브랜드</a><a href="{{url_for('shop')}}">두피케어 가이드</a><a href="{{url_for('order_lookup')}}">주문조회</a></nav></header>
 {% with messages=get_flashed_messages() %}{% for message in messages %}<div class="flash">{{message}}</div>{% endfor %}{% endwith %}<main class="page">{{body|safe}}</main>
-<footer><div class="footerin"><div><div class="footer-logo">BOJJIMI</div><p class="small">RUBIE의 자연유래 화장품을 소개하는 공식 온라인 스토어</p><p class="small"><a href="{{url_for('policy',kind='terms')}}">이용약관</a> · <a href="{{url_for('policy',kind='privacy')}}">개인정보처리방침</a> · <a href="{{url_for('policy',kind='returns')}}">교환·반품정책</a></p></div><div class="small">{% if store.business_name %}상호 {{store.business_name}} · 대표 {{store.representative_name}}<br>사업자등록번호 {{store.business_number}} · 통신판매업 {{store.ecommerce_number}}<br>{{store.business_address}}<br>고객센터 {{store.customer_service_phone}} · {{store.customer_service_email}}{% else %}현재 정식 판매 준비 중입니다.{% endif %}<br>© 2026 BOJJIMI. All rights reserved.</div></div></footer>
+<footer><div class="footerin"><div><div class="footer-logo">BOJJIMI</div><p class="small">두피와 모발의 건강한 일상을 위한 전문 케어 스토어</p><p class="small"><a href="{{url_for('policy',kind='terms')}}">이용약관</a> · <a href="{{url_for('policy',kind='privacy')}}">개인정보처리방침</a> · <a href="{{url_for('policy',kind='returns')}}">교환·반품정책</a></p></div><div class="small">{% if store.business_name %}상호 {{store.business_name}} · 대표 {{store.representative_name}}<br>사업자등록번호 {{store.business_number}} · 통신판매업 {{store.ecommerce_number}}<br>{{store.business_address}}<br>고객센터 {{store.customer_service_phone}} · {{store.customer_service_email}}{% else %}현재 정식 판매 준비 중입니다.{% endif %}<br>© 2026 BOJJIMI. All rights reserved.</div></div></footer>
 <nav class="mobile-nav"><a href="{{url_for('home')}}"><span>⌂</span>홈</a><a href="{{url_for('shop')}}"><span>◫</span>제품</a><a href="{{url_for('cart')}}"><span>🛒</span>장바구니</a><a href="{{url_for('mypage') if user else url_for('order_lookup')}}"><span>○</span>{{'마이' if user else '주문조회'}}</a></nav>
 <script>document.querySelectorAll('form[method="post"],form[method="POST"]').forEach((form)=>{if(!form.querySelector('input[name="csrf_token"]')){const input=document.createElement('input');input.type='hidden';input.name='csrf_token';input.value=document.querySelector('meta[name="csrf-token"]').content;form.prepend(input);}});</script></body></html>
 """
@@ -417,16 +462,57 @@ def page(title, body, **context):
 @app.route("/")
 def home():
     con = db()
-    products = con.execute("SELECT * FROM products WHERE status IN ('active','coming') ORDER BY featured DESC,id DESC LIMIT 6").fetchall()
+    products = con.execute("SELECT * FROM products WHERE status IN ('active','coming') AND price > 0 ORDER BY featured DESC,id ASC LIMIT 5").fetchall()
     con.close()
     body = render_template_string("""
-    <section class="hero"><div><div class="eyebrow">BOJJIMI × RUBIE</div><h1>나를 위한<br>정직한 아름다움</h1><p>자연유래 원료의 장점과 편안한 사용감을 함께 고민합니다. 과장된 약속 대신 확인된 정보와 섬세한 제품 경험을 전합니다.</p><div class="actions"><a class="btn" href="{{url_for('shop')}}">제품 만나보기</a><a class="btn ghost" href="{{url_for('brand')}}">루비에 이야기</a></div></div><div class="hero-art"><div><b>RUBIE</b><span>NATURAL BALANCE</span></div></div></section>
-    <section class="section"><div class="section-head"><div><div class="eyebrow">OUR PRODUCTS</div><h2>루비에 제품</h2><p class="lead">두피부터 피부까지, 매일 편안하게 사용할 제품을 준비합니다.</p></div><a class="btn ghost small" href="{{url_for('shop')}}">전체 보기</a></div>
-    {% if products %}<div class="grid">{% for p in products %}<a class="card" href="{{url_for('product_detail',product_id=p['id'])}}"><div class="product-visual">{% if p['image_url'] %}<img src="{{p['image_url']}}" alt="{{p['name']}}">{% else %}<div class="bottle">R</div>{% endif %}{% if p['badge'] %}<span class="badge">{{p['badge']}}</span>{% endif %}</div><div class="card-body"><div class="category">{{p['category']}}</div><h3>{{p['name']}}</h3><p class="muted">{{p['short_desc']}}</p>{% if p['status']=='active' %}<div class="price">{{(p['sale_price'] if p['sale_price'] is not none else p['price'])|won}}{% if p['sale_price'] is not none %}<span class="old-price">{{p['price']|won}}</span>{% endif %}</div>{% else %}<div class="price" style="color:var(--rose)">출시 준비 중</div>{% endif %}</div></a>{% endfor %}</div>{% else %}<div class="empty">첫 제품을 준비하고 있습니다.</div>{% endif %}</section>
-    <section class="section"><div class="values"><div class="value"><div class="num">01</div><h3>확인된 정보</h3><p class="muted">근거 없이 효능을 과장하지 않고 제품의 실제 역할을 분명하게 안내합니다.</p></div><div class="value"><div class="num">02</div><h3>편안한 사용감</h3><p class="muted">매일 손이 가는 향, 제형과 마무리감을 중요하게 생각합니다.</p></div><div class="value"><div class="num">03</div><h3>책임 있는 판매</h3><p class="muted">전성분, 사용법과 주의사항을 투명하게 공개합니다.</p></div></div></section>
-    <section class="section story"><div><div class="eyebrow" style="color:#e8b7c4">RUBIE STORY</div><h2>좋은 원료만큼<br>중요한 것은 균형입니다.</h2><p>루비에는 자연유래 원료를 맹목적으로 강조하지 않습니다. 안전성, 안정성, 사용감과 필요한 기능이 조화를 이루는 제품을 지향합니다.</p></div><div class="story-note"><b>현재 준비 중인 첫 제품</b><h3>보태니컬 두피 샴푸</h3><p>풍성한 거품과 만족스러운 향은 살리고, 세정 후 뻣뻣함을 줄이는 방향으로 정식 제품화를 준비하고 있습니다.</p></div></section>
-    """, products=products)
-    return page("루비에 공식 화장품몰", body)
+    <style>
+    .desktop-cats{max-width:1180px;margin:auto;display:flex;justify-content:space-around;padding:0 18px 13px;font-size:14px;font-weight:600}
+    .top{position:relative}.topin{height:66px}.header-cart{font-size:21px}.page{padding:0 22px 150px;max-width:1180px}
+    .bo-hero{margin:0 -22px;min-height:355px;background:linear-gradient(95deg,#fff7ef 0%,#f5e9e3 52%,#e5cfc5 100%);position:relative;display:flex;align-items:center;overflow:hidden;padding:35px 5%}
+    .bo-hero:after{content:"";position:absolute;right:4%;top:10%;height:80%;width:40%;border-radius:46% 46% 20% 20%;background:linear-gradient(135deg,#c8a89e,#f5e3d9);opacity:.3}
+    .bo-copy{z-index:1;position:relative;max-width:58%}.bo-copy .kicker{font-size:16px;color:#5d454b}.bo-copy h1{font-size:clamp(31px,4.5vw,55px);line-height:1.12;letter-spacing:-1.7px;margin:12px 0 16px;color:#38252c}.bo-copy h1 em{color:#aa4c69;font-style:normal}.bo-copy p{font-size:17px;color:#57434a;margin:0 0 19px}
+    .bo-cats{display:flex;gap:9px;overflow-x:auto;scrollbar-width:none;padding:18px 0}.bo-cats a{flex:none;white-space:nowrap;border:1px solid #eadbde;background:#fff;padding:8px 13px;border-radius:25px;font-size:12px}.bo-cats a:nth-child(5){background:#4d2934;color:#fff}
+    .bo-section{padding:12px 0 50px}.bo-section .section-head{margin-bottom:14px}.bo-section h2{font-family:Georgia,serif;font-size:35px;margin:0 0 3px}.bo-section .lead{font-size:14px}
+    .bo-grid{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:17px}.bo-grid .card{grid-column:span 2;border-radius:10px;min-width:0}.bo-grid .card:nth-child(n+4){grid-column:span 3}.bo-grid .product-visual{aspect-ratio:1.12}.bo-grid .card-body{padding:10px 13px 16px}.bo-grid h3{font-size:16px;line-height:1.3;margin:0 0 6px}.bo-grid .price{font-size:20px;margin-top:8px;color:#231b1e}.bo-grid .badge{background:#b74e6b;color:white;top:10px;left:10px}.bo-tag{display:inline-block;background:#f6f0f0;color:#6d6468;padding:2px 6px;font-size:11px;margin:3px 2px 0 0;border-radius:4px}.bo-demo{font-size:11px;color:#a44b64;font-weight:700}
+    .mobile-nav{z-index:80}
+    @media(max-width:650px){.topin{height:65px;padding:0 16px}.logo{font-size:25px}.logo small{font-size:8px}.desktop-cats{display:none}.header-cart{font-size:17px}.page{padding:0 12px 170px}.bo-hero{margin:0 -12px;padding:18px 18px;min-height:205px}.bo-hero:after{width:43%;right:-12%;opacity:.22}.bo-copy{max-width:88%}.bo-copy .kicker{font-size:11px}.bo-copy h1{font-size:clamp(26px,7vw,35px);line-height:1.17;margin:8px 0 12px}.bo-copy p{font-size:12px;margin-bottom:12px}.bo-copy .btn{padding:10px 15px;font-size:12px}.bo-cats{padding:13px 0;gap:6px}.bo-cats a{font-size:11px;padding:7px 11px}.bo-section{padding:0 0 120px}.bo-section h2{font-size:27px}.bo-section .lead{font-size:12px}.bo-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}.bo-grid .card,.bo-grid .card:nth-child(n+4){grid-column:span 1}.bo-grid .card:last-child:nth-child(odd){grid-column:span 2}.bo-grid .product-visual{aspect-ratio:1.12}.bo-grid .card-body{padding:9px}.bo-grid h3{font-size:13px}.bo-grid .price{font-size:16px}.bo-grid .badge{font-size:9px;padding:4px 6px;top:6px;left:6px}.bo-section .section-head{align-items:center}.bo-section .section-head>a{font-size:12px;white-space:nowrap}}
+.topin{justify-content:space-between}.topin .nav:before{content:"⌕";font-size:27px;margin-right:8px}.topin .logo{font-size:34px}.topin .logo small{font-size:10px}.bo-grid .card{box-shadow:0 1px 4px #39202b0b}.bo-grid .product-visual img{object-fit:cover;width:100%;height:100%}
+@media(max-width:650px){.topin .logo{font-size:25px}.topin .logo small{font-size:8px}.topin .nav:before{font-size:21px;margin-right:4px}.mobile-nav{bottom:calc(9px + env(safe-area-inset-bottom,0px));padding:7px 9px}.bo-grid .card:last-child:nth-child(odd){grid-column:span 2}.bo-grid .card:last-child:nth-child(odd) .product-visual{aspect-ratio:1.7}.bo-section .section-head{flex-direction:row;align-items:center;margin-bottom:11px}}
+
+    /* Reference storefront: compact left-aligned heading, continuous catalog and non-obscuring navigation */
+    .bo-section .section-head{display:flex!important;flex-direction:row!important;align-items:center!important;justify-content:space-between!important;text-align:left!important}
+    .bo-section .section-head>div{min-width:0}.bo-section h2{text-align:left!important}
+    .bo-section .section-head>a{margin:0!important;white-space:nowrap}
+    .bo-grid .card{display:block;text-align:left}.bo-grid .card-body{position:relative}
+    .bo-grid .price{display:flex;align-items:center;justify-content:space-between}
+    .bo-grid .price:after{content:"›";font-size:22px;font-weight:500;background:#fbe9ec;padding:1px 12px;border-radius:9px;color:#8f3453}
+    .bo-hero:after{display:none}
+    .bo-hero{background:linear-gradient(90deg,#fff8f1,#f2e5e0);background-position:center;background-size:cover}
+    .bo-cats{justify-content:space-between}.bo-section .section-head{width:100%;gap:10px}.bo-section .section-head>a{flex:none}.bo-section .section-head .lead{margin:2px 0 0}.bo-grid .product-visual{background:#f8f1ed}
+    @media(max-width:650px){
+      .bo-section .section-head{margin-bottom:12px!important}
+      .bo-section .section-head>a{font-size:12px!important}
+      .bo-section .lead{line-height:1.35}
+      .bo-grid .price:after{font-size:18px;padding:2px 9px}
+      .mobile-nav{position:fixed!important;bottom:calc(12px + env(safe-area-inset-bottom,0px))!important;z-index:100!important}
+      .page{padding-bottom:calc(210px + env(safe-area-inset-bottom,0px))!important}
+      .bo-hero{min-height:220px}
+    }
+
+    .bo-section .section-head{display:flex!important;flex-direction:row!important;align-items:center!important;justify-content:space-between!important;text-align:left!important}
+    .bo-section .section-head>div{flex:1;min-width:0}.bo-section .section-head>a{flex:none}
+    .bo-grid .card{overflow:hidden}.bo-grid .product-visual img{display:block;width:100%;height:100%;object-fit:cover}
+    .bo-hero{border-radius:0!important}.bo-hero:before{content:"";position:absolute;right:0;top:0;bottom:0;width:38%;background:linear-gradient(130deg,#ead8ce,#f7e9e2);opacity:.3}
+    @media(max-width:650px){.bo-hero{min-height:215px!important}.bo-hero:before{opacity:.12}.bo-section .section-head{margin-bottom:12px!important}.bo-grid .card:last-child:nth-child(odd){grid-column:span 2}.bo-grid .card:last-child:nth-child(odd) .product-visual{aspect-ratio:1.65}.mobile-nav{bottom:calc(12px + env(safe-area-inset-bottom,0px))!important;z-index:50!important}.page{padding-bottom:210px!important}}
+    .bo-grid .product-visual img{font-size:0}.bo-grid .card:focus-visible{outline:3px solid #a54d6c;outline-offset:2px}.bo-cats a:focus-visible{outline:3px solid #a54d6c}.bo-grid .card-body{min-height:125px}.bo-demo{letter-spacing:-.2px}
+    @media(max-width:650px){.bo-grid .card-body{min-height:122px}.bo-grid .card{border:1px solid #eee4e3}.bo-grid .card h3{word-break:keep-all}.bo-grid .price{margin-top:7px}}
+    </style>
+    <section class="bo-hero"><div class="bo-copy"><div class="kicker">건강한 두피가 아름다운 변화를 만듭니다</div><h1><em>두피</em>부터<br>다시 시작하는 아름다움</h1><p>보찌미가 제안하는<br>프리미엄 두피·모발 케어 솔루션</p><a class="btn" href="{{url_for('shop')}}">제품 보러가기　›</a></div></section>
+    <nav class="bo-cats" aria-label="두피케어 카테고리"><a href="{{url_for('shop')}}">전체</a>{% for c in categories %}<a href="{{url_for('shop',category=c)}}">{{c}}</a>{% endfor %}</nav>
+    <section class="bo-section"><div class="section-head"><div><h2>BEST 제품</h2><p class="lead">보찌미 두피·모발 케어 상품 미리보기</p></div><a href="{{url_for('shop')}}">전체보기 ›</a></div>
+    {% if products %}<div class="bo-grid">{% for p in products %}<a class="card" href="{{url_for('product_detail',product_id=p['id'])}}"><div class="product-visual"><img src="{{p['image_url'] or '/static/bojjimi-scalp-preview.svg'}}" alt="{{p['name']}} 콘셉트 이미지" loading="lazy" onerror="this.onerror=null;this.src='/static/bojjimi-scalp-preview.svg'"><span class="badge">DEMO · 판매불가</span></div><div class="card-body"><h3>{{p['name']}}</h3><span class="bo-tag">{{p['category']}}</span><span class="bo-tag">상품 준비중</span><div class="price">{{p['price']|won}}</div><div class="bo-demo">예시 가격 · 구매 불가</div></div></a>{% endfor %}</div>{% else %}<div class="empty">샘플 상품 준비 중입니다.</div>{% endif %}</section>
+    """,products=products,categories=CATEGORIES)
+    return page("두피·모발 전문 쇼핑몰",body)
 
 
 @app.route("/shop")
