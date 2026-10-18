@@ -108,7 +108,7 @@ def remove():
 @shop.get("/account")
 def account():
     if session.get("demo_member"):
-        return page("내 계정 · 체험 회원","<div class='warning'>체험용 회원 상태입니다. 실제 회원가입·개인정보 저장은 하지 않습니다.</div><div class='card'><h2>체험 회원으로 로그인 중</h2><p>환영합니다! 소망약국 상품 체험을 계속 이용할 수 있어요.</p><div class='account-shortcuts'><a class='btn' href='/shop'>상품 둘러보기</a><a class='btn' href='/cart'>내 장바구니 ("+str(cart_count())+")</a><a class='btn' href='/checkout'>결제 전 확인</a></div><p><small>체험 계정은 실제 회원 계정이 아니며 주문 내역을 저장하지 않습니다.</small></p><form action='/demo/logout' method='post'><input type='hidden' name='csrf' value='"+csrf()+"'><button>체험 로그아웃</button></form><form action='/demo/delete' method='post'><input type='hidden' name='csrf' value='"+csrf()+"'><button type='submit' class='subtle-action'>체험 계정 삭제</button></form></div>")
+        return page("내 계정 · 체험 회원","<div class='warning'>체험용 회원 상태입니다. 실제 회원가입·개인정보 저장은 하지 않습니다.</div><div class='card'><h2>체험 회원으로 로그인 중</h2><p>환영합니다, "+esc(session.get('demo_nickname') or '소망손님')+"님! 소망약국 상품 체험을 계속 이용할 수 있어요.</p><div class='account-shortcuts'><a class='btn' href='/shop'>상품 둘러보기</a><a class='btn' href='/cart'>내 장바구니 ("+str(cart_count())+")</a><a class='btn' href='/checkout'>결제 전 확인</a></div><p><small>체험 계정은 실제 회원 계정이 아니며 주문 내역을 저장하지 않습니다.</small></p><form action='/demo/logout' method='post'><input type='hidden' name='csrf' value='"+csrf()+"'><button>체험 로그아웃</button></form><form action='/demo/delete' method='post'><input type='hidden' name='csrf' value='"+csrf()+"'><button type='submit' class='subtle-action'>체험 계정 삭제</button></form></div>")
     if session.get("member_id"):
         with db() as c:
             state=c.execute("SELECT suspended FROM shop_member_controls WHERE member_id=?",(session["member_id"],)).fetchone()
@@ -141,6 +141,7 @@ def demo_delete():
 def demo_login():
     check()
     session["demo_member"]=True
+    session.pop("demo_nickname",None)
     return redirect("/account")
 @shop.post("/demo/logout")
 def demo_logout():
