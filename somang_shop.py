@@ -71,7 +71,7 @@ def catalog():
         body+="<option value='"+key+"'"+(" selected" if sort==key else "")+">"+label+"</option>"
     body+="</select></label><button>검색</button><a href='/shop'>초기화</a></form><p><small>검색 결과 "+str(len(selected))+"개 · <a href='/cart'>장바구니 보기 →</a></small></p><div class='demo-grid'>"
     for p in selected:
-        body+="<article class='card product-card'><div class='product-art'>"+p.get("emoji","🛍️")+"</div><div class='product-info'><small>"+esc(p["category"])+" · "+("체험 상품" if p["id"] in DEMO_BY_ID else "등록 상품")+"</small><h2>"+esc(p["name"])+"</h2><p>"+esc(p["description"])+"</p><strong>"+f'{p["price"]:,}'+"원</strong><p><small>재고 "+str(p["stock"])+"개 · 체험 전시 상품</small></p><p><a href='/shop/product/"+str(p["id"])+"'>상세 보기 →</a></p><form action='/cart/add' method='post'><input type='hidden' name='csrf' value='"+csrf()+"'><input type='hidden' name='product_id' value='"+str(p["id"])+"'><label>수량 <input type='number' name='quantity' min='1' max='20' value='1'></label><button>장바구니 담기</button></form></div></article>"
+        body+="<article class='card product-card'><div class='product-art'>"+p.get("emoji","🛍️")+"</div><div class='product-info'><small>"+esc(p["category"])+" · "+("체험 상품" if p["id"] in DEMO_BY_ID else "등록 상품")+"</small><h2><a href='/shop/product/"+str(p["id"])+"'>"+esc(p["name"])+"</a></h2><p>"+esc(p["description"])+"</p><strong>"+f'{p["price"]:,}'+"원</strong><p><small>재고 "+str(p["stock"])+"개 · 체험 전시 상품</small></p><p><a href='/shop/product/"+str(p["id"])+"'>상세 보기 →</a></p><form action='/cart/add' method='post'><input type='hidden' name='csrf' value='"+csrf()+"'><input type='hidden' name='product_id' value='"+str(p["id"])+"'><label>수량 <input type='number' name='quantity' min='1' max='"+str(min(20,p["stock"]))+"' value='1' required></label><button>장바구니 담기</button></form></div></article>"
     if not selected:body+="<p>조건에 맞는 상품이 없습니다. <a href='/shop'>전체 상품 보기</a></p>"
     body+="</div><p><a class='btn' href='/cart'>장바구니 확인 →</a></p>"
     return page("상품 둘러보기",body)
@@ -86,7 +86,11 @@ def add():
         with db() as c:p=c.execute("SELECT stock FROM products WHERE id=? AND approved=1 AND visible=1",(pid,)).fetchone()
     if not p:abort(404)
     cart=dict(session.get("cart",{}))
-    cart[str(pid)]=min(20,p["stock"],int(cart.get(str(pid),0))+qty)
+    try:existing=int(cart.get(str(pid),0))
+    except (ValueError,TypeError):existing=0
+    new_qty=min(20,max(0,p["stock"]),max(0,existing)+qty)
+    if new_qty<=0:abort(409,"품절된 상품입니다.")
+    cart[str(pid)]=new_qty
     session["cart"]=cart
     return redirect("/cart")
 def contents():
@@ -124,6 +128,7 @@ def update_cart():
             with db() as c:p=c.execute("SELECT stock FROM products WHERE id=? AND approved=1 AND visible=1",(pid,)).fetchone()
             if p is None:abort(404)
             stock=p["stock"]
+        if stock<=0:abort(409,"품절된 상품입니다.")
         cart[str(pid)]=min(qty,stock)
     session["cart"]=cart
     return redirect("/cart")
