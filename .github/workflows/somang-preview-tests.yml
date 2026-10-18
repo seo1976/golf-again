@@ -1,0 +1,19 @@
+name: Somang pharmacy preview smoke tests
+on:
+  push:
+    branches: [somang-pharmacy-independent-preview]
+  workflow_dispatch:
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install preview dependencies
+        run: python -m pip install 'Flask>=3.0,<4'
+      - name: Syntax check
+        run: python -m py_compile somang_preview.py somang_shop.py somang_ops.py somang_payment.py somang_launch.py somang_reports.py
+      - name: Smoke tests
+        run: python -m unittest discover -s somang_tests -v
