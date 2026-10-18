@@ -98,5 +98,24 @@ def stock():
     with conn() as c:
         rows=c.execute("SELECT id,name,stock,approved,visible FROM products ORDER BY id DESC LIMIT 100").fetchall()
         movements=c.execute("SELECT m.created_at,p.name,m.change_qty,m.reason FROM stock_movements m JOIN products p ON p.id=m.product_id ORDER BY m.id DESC LIMIT 50").fetchall()
-    body="<div class='box'><h2>상품별 재고</h2>"+''.join("<p>#"+str(r["id"])+" "+esc(r["name"])+" · "+str(r["stock"])+"개 · 승인 "+str(r["approved"])+" · 공개 "+str(r["visible"])+"</p>" for r in rows)+"<p>재고 수량 변경은 <a href='/admin'>상품 관리</a>에서 할 수 있습니다.</p></div><div class='box'><h2>재고 이동 기록</h2>"+''.join("<p>"+esc(r[0])+" "+esc(r[1])+" "+str(r[2])+" · "+esc(r[3])+"</p>" for r in movements)+"<p><small>현재 재고 수정과 이동 기록은 아직 자동 연동되지 않습니다.</small></p></div>"
+    body="<div class='box'><h2>입고·출고·재고 조정</h2><p>입고는 양수, 출고는 음수로 입력합니다. 품목별 유통기한·로트 관리는 아직 미구현입니다.</p>"+form('/admin/ops/stock/adjust',"<select name='product_id'>"+''.join("<option value='"+str(r['id'])+"'>"+esc(r['name'])+"</option>" for r in rows)+"</select><input name='change_qty' type='number' required placeholder='수량 변화 (+/-)'><input name='reason' required maxlength='120' placeholder='입고/출고 사유'>","재고 변경 기록")+"</div><div class='box'><h2>상품별 재고</h2>"+''.join("<p>#"+str(r["id"])+" "+esc(r["name"])+" · "+str(r["stock"])+"개 · 승인 "+str(r["approved"])+" · 공개 "+str(r["visible"])+"</p>" for r in rows)+"<p>재고 이력 기록을 위해 위 입고·출고 기능을 사용하세요. 상품 관리 화면의 직접 수정은 아직 이력과 연동되지 않습니다.</p></div><div class='box'><h2>재고 이동 기록</h2>"+''.join("<p>"+esc(r[0])+" "+esc(r[1])+" "+str(r[2])+" · "+esc(r[3])+"</p>" for r in movements)+"<p><small>현재 재고 수정과 이동 기록은 아직 자동 연동되지 않습니다.</small></p></div>"
     return layout("재고 현황",body)
+
+@ops.post("/stock/adjust")
+def adjust_stock():
+    """Atomically adjust stock and append an inventory movement record."""
+    guard(True)
+    try:
+        pid=int(request.form.get("product_id",""))
+        delta=int(request.form.get("change_qty",""))
+    except (ValueError,TypeError):abort(400)
+    reason=request.form.get("reason","").strip()[:120]
+    if not reason or delta==0 or abs(delta)>100000:abort(400)
+    with conn() as c:
+        c.execute("BEGIN IMMEDIATE")
+        row=c.execute("SELECT stock FROM products WHERE id=?",(pid,)).fetchone()
+        if row is None or row["stock"]+delta<0:abort(400)
+        c.execute("UPDATE products SET stock=stock+? WHERE id=?",(delta,pid))
+        c.execute("INSERT INTO stock_movements(product_id,change_qty,reason) VALUES(?,?,?)",(pid,delta,reason))
+        audit(c,"stock.adjust",f"product={pid},change={delta},reason={reason}")
+    return redirect("/admin/ops/stock")
