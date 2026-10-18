@@ -87,4 +87,23 @@ class SomangSmokeTests(unittest.TestCase):
         finally:
             os.environ.pop("SOMANG_ADMIN_PASSWORD",None)
             os.environ.pop("SOMANG_SECRET_KEY",None)
+    def test_lot_receipt_and_validation(self):
+        import somang_preview
+        os.environ["SOMANG_ADMIN_PASSWORD"]="unit-test-only-password"
+        os.environ["SOMANG_SECRET_KEY"]="unit-test-only-secret"
+        try:
+            with somang_preview.db() as c:
+                pid=c.execute("INSERT INTO products(name,category,price,stock) VALUES(?,?,?,?)",("Lot Test","화장품",1000,0)).lastrowid
+            with self.client.session_transaction() as sess:
+                sess["admin"]=True
+                sess["csrf"]="test-token"
+            data={"csrf":"test-token","product_id":pid,"quantity":5,"lot_code":"L2026A","expiry_date":"2027-12-31"}
+            self.assertEqual(self.client.post("/admin/ops/lots/receive",data=data).status_code,302)
+            self.assertEqual(self.client.post("/admin/ops/lots/receive",data={**data,"expiry_date":"bad-date"}).status_code,400)
+            with somang_preview.db() as c:
+                self.assertEqual(c.execute("SELECT stock FROM products WHERE id=?",(pid,)).fetchone()[0],5)
+                self.assertEqual(c.execute("SELECT quantity FROM inventory_lots WHERE product_id=?",(pid,)).fetchone()[0],5)
+        finally:
+            os.environ.pop("SOMANG_ADMIN_PASSWORD",None)
+            os.environ.pop("SOMANG_SECRET_KEY",None)
 if __name__=="__main__":unittest.main()
