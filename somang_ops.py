@@ -14,6 +14,7 @@ def init():
         CREATE TABLE IF NOT EXISTS purchase_orders(id INTEGER PRIMARY KEY,supplier_id INTEGER NOT NULL,reference TEXT NOT NULL,status TEXT NOT NULL DEFAULT 'draft',total INTEGER NOT NULL DEFAULT 0,created_at TEXT DEFAULT CURRENT_TIMESTAMP,FOREIGN KEY(supplier_id) REFERENCES suppliers(id));
         CREATE TABLE IF NOT EXISTS ledger(id INTEGER PRIMARY KEY,kind TEXT NOT NULL,amount INTEGER NOT NULL,description TEXT NOT NULL,reference TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);
         CREATE TABLE IF NOT EXISTS stock_movements(id INTEGER PRIMARY KEY,product_id INTEGER NOT NULL,change_qty INTEGER NOT NULL,reason TEXT NOT NULL,created_at TEXT DEFAULT CURRENT_TIMESTAMP);
+        CREATE TABLE IF NOT EXISTS inventory_lots(id INTEGER PRIMARY KEY,product_id INTEGER NOT NULL,lot_code TEXT NOT NULL,expiry_date TEXT NOT NULL,quantity INTEGER NOT NULL DEFAULT 0 CHECK(quantity>=0),created_at TEXT DEFAULT CURRENT_TIMESTAMP,UNIQUE(product_id,lot_code,expiry_date));
         CREATE TABLE IF NOT EXISTS ops_audit(id INTEGER PRIMARY KEY,action TEXT NOT NULL,details TEXT NOT NULL,created_at TEXT DEFAULT CURRENT_TIMESTAMP);
         """)
 init()
@@ -23,7 +24,7 @@ def guard(post=False):
 def esc(x):return html.escape(str(x),quote=True)
 def csrf():return esc(session.get("csrf",""))
 def layout(title,body):
-    return """<!doctype html><html lang="ko"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>소망약국 운영관리</title><style>body{font-family:system-ui,sans-serif;background:#f5faf6;color:#244638;margin:0}header{background:#1d5945;color:white;padding:18px 5%}main{max-width:1100px;margin:auto;padding:25px 16px}a{color:#216f55}header a{color:white}nav{display:flex;gap:15px;flex-wrap:wrap;margin:18px 0}.box{background:white;border:1px solid #dce9e0;border-radius:13px;padding:20px;margin:14px 0}input,select{padding:10px;margin:5px;max-width:95%;border:1px solid #ccc;border-radius:7px}button{padding:10px 15px;background:#267456;color:white;border:0;border-radius:7px}table{border-collapse:collapse;width:100%}td,th{padding:9px;text-align:left;border-bottom:1px solid #eee}small{color:#667}form{display:flex;flex-wrap:wrap;gap:7px;align-items:center} .scroll{overflow-x:auto}</style><header><b>✚ 소망약국 · 통합 운영관리</b>　<a href="/">홈페이지</a>　<a href="/admin">상품 관리</a></header><main><nav><a href="/admin/ops">대시보드</a><a href="/admin/ops/suppliers">공급사·발주</a><a href="/admin/ops/customers">고객 관리</a><a href="/admin/ops/ledger">매출·매입 장부</a><a href="/admin/ops/stock">재고</a></nav><h1>"""+esc(title)+"</h1><p><small>개발용 운영 화면 · 현재 무료 서버의 데이터는 영구 보관되지 않습니다. 실제 고객 개인정보 및 실거래를 입력하지 마세요.</small></p>"+body+"</main></html>"
+    return """<!doctype html><html lang="ko"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>소망약국 운영관리</title><style>body{font-family:system-ui,sans-serif;background:#f5faf6;color:#244638;margin:0}header{background:#1d5945;color:white;padding:18px 5%}main{max-width:1100px;margin:auto;padding:25px 16px}a{color:#216f55}header a{color:white}nav{display:flex;gap:15px;flex-wrap:wrap;margin:18px 0}.box{background:white;border:1px solid #dce9e0;border-radius:13px;padding:20px;margin:14px 0}input,select{padding:10px;margin:5px;max-width:95%;border:1px solid #ccc;border-radius:7px}button{padding:10px 15px;background:#267456;color:white;border:0;border-radius:7px}table{border-collapse:collapse;width:100%}td,th{padding:9px;text-align:left;border-bottom:1px solid #eee}small{color:#667}form{display:flex;flex-wrap:wrap;gap:7px;align-items:center} .scroll{overflow-x:auto}</style><header><b>✚ 소망약국 · 통합 운영관리</b>　<a href="/">홈페이지</a>　<a href="/admin">상품 관리</a></header><main><nav><a href="/admin/ops">대시보드</a><a href="/admin/ops/suppliers">공급사·발주</a><a href="/admin/ops/customers">고객 관리</a><a href="/admin/ops/ledger">매출·매입 장부</a><a href="/admin/ops/stock">재고</a><a href="/admin/ops/lots">로트·유통기한</a></nav><h1>"""+esc(title)+"</h1><p><small>개발용 운영 화면 · 현재 무료 서버의 데이터는 영구 보관되지 않습니다. 실제 고객 개인정보 및 실거래를 입력하지 마세요.</small></p>"+body+"</main></html>"
 def form(action,fields,button):
     return "<form method='post' action='"+action+"'><input type='hidden' name='csrf' value='"+csrf()+"'>"+fields+"<button>"+button+"</button></form>"
 def audit(c,action,details):c.execute("INSERT INTO ops_audit(action,details) VALUES(?,?)",(action,details))
@@ -149,3 +150,37 @@ def receive_purchase():
         c.execute("INSERT INTO ledger(kind,amount,description,reference) VALUES('expense',?,?,?)",(order["total"],"발주 입고 확정 (테스트)",f"PO-{order_id}"))
         audit(c,"purchase.received",f"order={order_id},product={product_id},qty={qty},amount={order['total']}")
     return redirect("/admin/ops/suppliers")
+
+@ops.post("/lots/receive")
+def receive_lot():
+    """Register a non-medicine demo batch with expiry and stock movement."""
+    guard(True)
+    try:
+        pid=int(request.form.get("product_id",""))
+        qty=int(request.form.get("quantity",""))
+    except (ValueError,TypeError):abort(400)
+    lot=request.form.get("lot_code","").strip()[:60]
+    expiry=request.form.get("expiry_date","").strip()
+    import datetime
+    try:datetime.date.fromisoformat(expiry)
+    except ValueError:abort(400)
+    if not lot or qty<=0 or qty>100000:abort(400)
+    with conn() as c:
+        c.execute("BEGIN IMMEDIATE")
+        product=c.execute("SELECT id,category FROM products WHERE id=?",(pid,)).fetchone()
+        if product is None:abort(404)
+        if "의약품" in product["category"]:abort(400,"의약품 로트는 이 쇼핑몰에서 취급하지 않습니다.")
+        c.execute("INSERT INTO inventory_lots(product_id,lot_code,expiry_date,quantity) VALUES(?,?,?,?) ON CONFLICT(product_id,lot_code,expiry_date) DO UPDATE SET quantity=quantity+excluded.quantity",(pid,lot,expiry,qty))
+        c.execute("UPDATE products SET stock=stock+? WHERE id=?",(qty,pid))
+        c.execute("INSERT INTO stock_movements(product_id,change_qty,reason) VALUES(?,?,?)",(pid,qty,f"LOT {lot} expiry {expiry}"))
+        audit(c,"lot.received",f"product={pid},lot={lot},qty={qty}")
+    return redirect("/admin/ops/stock")
+@ops.get("/lots")
+def lots():
+    guard()
+    with conn() as c:
+        rows=c.execute("SELECT l.lot_code,l.expiry_date,l.quantity,p.name FROM inventory_lots l JOIN products p ON p.id=l.product_id ORDER BY l.expiry_date,l.id LIMIT 200").fetchall()
+        products=c.execute("SELECT id,name FROM products WHERE category NOT LIKE '%의약품%' ORDER BY id DESC LIMIT 100").fetchall()
+    fields="<select name='product_id'>"+''.join("<option value='"+str(p['id'])+"'>"+esc(p['name'])+"</option>" for p in products)+"</select><input name='lot_code' required maxlength='60' placeholder='로트번호'><input name='expiry_date' type='date' required><input name='quantity' type='number' min='1' required placeholder='입고 수량'>"
+    body="<div class='box'><h2>로트·유통기한 입고 (개발용)</h2><p>의약품이 아닌 품목에 한정합니다. 일반 재고와 로트 재고는 아직 출고 배분이 연결되지 않았습니다.</p>"+form("/admin/ops/lots/receive",fields,"로트 입고")+"</div><div class='box'><h2>유통기한순 재고</h2>"+''.join("<p>"+esc(r['name'])+" · "+esc(r['lot_code'])+" · "+esc(r['expiry_date'])+" · "+str(r['quantity'])+"개</p>" for r in rows)+"</div>"
+    return layout("로트·유통기한",body)
