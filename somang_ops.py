@@ -179,7 +179,7 @@ def receive_lot():
 def lots():
     guard()
     with conn() as c:
-        rows=c.execute("SELECT l.lot_code,l.expiry_date,l.quantity,p.name FROM inventory_lots l JOIN products p ON p.id=l.product_id ORDER BY l.expiry_date,l.id LIMIT 200").fetchall()
+        rows=c.execute("SELECT l.id,l.lot_code,l.expiry_date,l.quantity,p.name FROM inventory_lots l JOIN products p ON p.id=l.product_id ORDER BY l.expiry_date,l.id LIMIT 200").fetchall()
         products=c.execute("SELECT id,name FROM products WHERE category NOT LIKE '%의약품%' ORDER BY id DESC LIMIT 100").fetchall()
     fields="<select name='product_id'>"+''.join("<option value='"+str(p['id'])+"'>"+esc(p['name'])+"</option>" for p in products)+"</select><input name='lot_code' required maxlength='60' placeholder='로트번호'><input name='expiry_date' type='date' required><input name='quantity' type='number' min='1' required placeholder='입고 수량'>"
     body="<div class='box'><h2>로트·유통기한 입고 (개발용)</h2><p>의약품이 아닌 품목에 한정합니다. 일반 재고와 로트 재고는 아직 출고 배분이 연결되지 않았습니다.</p>"+form("/admin/ops/lots/receive",fields,"로트 입고")+"</div><div class='box'><h2>유통기한순 재고</h2>"+''.join("<p>"+esc(r['name'])+" · "+esc(r['lot_code'])+" · "+esc(r['expiry_date'])+" · "+str(r['quantity'])+"개</p>" for r in rows)+"</div>"
@@ -189,4 +189,31 @@ def lots():
     expired=[r for r in rows if r["expiry_date"]<today.isoformat()]
     soon=[r for r in rows if today.isoformat()<=r["expiry_date"]<=cutoff.isoformat()]
     body="<div class='box'><h2>유통기한 주의</h2><p>기한 경과 "+str(len(expired))+"건 · 30일 이내 "+str(len(soon))+"건</p><p>경과 품목은 판매 가능 상태를 별도로 확인해야 합니다. 현재 자동 판매 차단은 미구현입니다.</p></div>"+body
+    options="".join("<option value='"+str(r["id"])+"'>"+esc(r["name"])+" / "+esc(r["lot_code"])+" / "+esc(r["expiry_date"])+" ("+str(r["quantity"])+"개)</option>" for r in rows if r["quantity"]>0 and r["expiry_date"]>=today.isoformat())
+    if options:
+        body+="<div class='box'><h2>로트별 출고 (개발용)</h2><p>유통기한이 지난 로트는 선택할 수 없으며 서버에서도 출고를 거부합니다. 실제 판매 주문과는 연결되지 않습니다.</p>"+form("/admin/ops/lots/dispatch","<select name='lot_id'>"+options+"</select><input type='number' name='quantity' min='1' required placeholder='출고 수량'>","로트 출고")+"</div>"
     return layout("로트·유통기한",body)
+
+@ops.post("/lots/dispatch")
+def dispatch_lot():
+    """Demo FEFO dispatch. Expired batches cannot be dispatched."""
+    guard(True)
+    try:
+        lot_id=int(request.form.get("lot_id",""))
+        qty=int(request.form.get("quantity",""))
+    except (ValueError,TypeError):abort(400)
+    if qty<=0 or qty>100000:abort(400)
+    import datetime
+    with conn() as c:
+        c.execute("BEGIN IMMEDIATE")
+        lot=c.execute("SELECT id,product_id,quantity,expiry_date,lot_code FROM inventory_lots WHERE id=?",(lot_id,)).fetchone()
+        if lot is None:abort(404)
+        if lot["expiry_date"]<datetime.date.today().isoformat():abort(409,"유통기한 경과 로트는 출고할 수 없습니다.")
+        if lot["quantity"]<qty:abort(409,"로트 재고 부족")
+        product=c.execute("SELECT stock FROM products WHERE id=?",(lot["product_id"],)).fetchone()
+        if product is None or product["stock"]<qty:abort(409,"상품 재고 부족")
+        c.execute("UPDATE inventory_lots SET quantity=quantity-? WHERE id=?",(qty,lot_id))
+        c.execute("UPDATE products SET stock=stock-? WHERE id=?",(qty,lot["product_id"]))
+        c.execute("INSERT INTO stock_movements(product_id,change_qty,reason) VALUES(?,?,?)",(lot["product_id"],-qty,f"LOT {lot['lot_code']} demo dispatch"))
+        audit(c,"lot.dispatch",f"lot={lot_id},qty={qty}")
+    return redirect("/admin/ops/lots")
