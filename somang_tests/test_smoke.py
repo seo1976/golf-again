@@ -55,6 +55,11 @@ class SomangSmokeTests(unittest.TestCase):
             self.assertEqual(client.post("/admin/returns",data={"csrf":"wrong","reference":"TEST-1","category":"반품","reason":"test"}).status_code,400)
             self.assertEqual(client.post("/admin/returns",data={"csrf":"admin-test-token","reference":"TEST-1","category":"반품","reason":"sample return"}).status_code,302)
             self.assertIn(b"TEST-1",client.get("/admin/returns").data)
+            with __import__("somang_shop").db() as c:
+                case_id=c.execute("SELECT id FROM shop_return_drafts WHERE reference=? ORDER BY id DESC LIMIT 1",("TEST-1",)).fetchone()[0]
+            self.assertEqual(client.post(f"/admin/returns/{case_id}/status",data={"csrf":"admin-test-token","status":"검토 완료"}).status_code,302)
+            self.assertIn("검토 완료".encode("utf-8"),client.get("/admin/returns").data)
+            self.assertEqual(client.post(f"/admin/returns/{case_id}/status",data={"csrf":"admin-test-token","status":"환불 완료"}).status_code,400)
         finally:
             os.environ.pop("SOMANG_ADMIN_PASSWORD",None)
             os.environ.pop("SOMANG_SECRET_KEY",None)
