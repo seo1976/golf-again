@@ -64,6 +64,7 @@ def main():
             raise TimeoutError("Deletion did not acquire lock")
         with connect() as db:
             with db.cursor() as cur:
+                cur.execute("SET application_name = 'somang-race-checkout'")
                 cur.execute("SELECT pg_backend_pid()")
                 backend_pid = cur.fetchone()[0]
             checkout_started.set()
@@ -124,6 +125,4 @@ def main():
 
 
 if __name__ == "__main__":
-    # Set application_name only on checkout session via PGOPTIONS so that
-    # pg_stat_activity can identify the blocked query without relying on timing.
     main()
