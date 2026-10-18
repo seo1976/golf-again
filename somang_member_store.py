@@ -95,3 +95,28 @@ def consume_email_token(token, purpose):
                     (row[0],),
                 )
             return row[0] if row else None
+
+
+def initialize_schema():
+    """Idempotent schema setup for the dedicated database only."""
+    from pathlib import Path
+    sql = Path(__file__).with_name("somang_member_schema.sql").read_text(encoding="utf-8")
+    with connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql)
+            cur.execute("SELECT to_regclass('public.members')")
+            if cur.fetchone()[0] is None:
+                raise RuntimeError("Member schema not initialized")
+    return True
+
+
+def schema_ready():
+    if not configured():
+        return False
+    try:
+        with connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT to_regclass('public.members')")
+                return cur.fetchone()[0] is not None
+    except Exception:
+        return False
