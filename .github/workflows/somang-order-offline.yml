@@ -13,6 +13,7 @@ on:
       - 'tests/test_somang_order_*.py'
       - 'tests/somang_order_postgres_smoke.sql'
       - 'tests/somang_order_concurrency.py'
+      - 'tests/somang_order_stock_race.py'
       - 'somang_member_schema.sql'
       - '.github/workflows/somang-order-offline.yml'
   workflow_dispatch:
@@ -75,3 +76,7 @@ jobs:
         run: |
           python -m pip install 'psycopg[binary]>=3.2,<4'
           python tests/somang_order_concurrency.py
+      - name: Verify duplicate submit and stock exhaustion races
+        env:
+          SOMANG_CI_DATABASE_URL: postgresql://somang_ci:ci-only-test-password@localhost:5432/somang_ci
+        run: python tests/somang_order_stock_race.py
