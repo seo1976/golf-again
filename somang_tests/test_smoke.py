@@ -66,4 +66,25 @@ class SomangSmokeTests(unittest.TestCase):
         finally:
             os.environ.pop("SOMANG_ADMIN_PASSWORD",None)
             os.environ.pop("SOMANG_SECRET_KEY",None)
+    def test_purchase_receipt_once(self):
+        import somang_preview
+        os.environ["SOMANG_ADMIN_PASSWORD"]="unit-test-only-password"
+        os.environ["SOMANG_SECRET_KEY"]="unit-test-only-secret"
+        try:
+            with somang_preview.db() as c:
+                pid=c.execute("INSERT INTO products(name,category,price,stock) VALUES(?,?,?,?)",("Receiving Test","화장품",1000,1)).lastrowid
+                sid=c.execute("INSERT INTO suppliers(name) VALUES(?)",("Test Supplier",)).lastrowid
+                oid=c.execute("INSERT INTO purchase_orders(supplier_id,reference,total) VALUES(?,?,?)",(sid,"TEST-PO",4000)).lastrowid
+            with self.client.session_transaction() as sess:
+                sess["admin"]=True
+                sess["csrf"]="test-token"
+            data={"csrf":"test-token","order_id":oid,"product_id":pid,"quantity":4}
+            self.assertEqual(self.client.post("/admin/ops/purchase/receive",data=data).status_code,302)
+            self.assertEqual(self.client.post("/admin/ops/purchase/receive",data=data).status_code,409)
+            with somang_preview.db() as c:
+                self.assertEqual(c.execute("SELECT stock FROM products WHERE id=?",(pid,)).fetchone()[0],5)
+                self.assertEqual(c.execute("SELECT COUNT(*) FROM ledger WHERE reference=?",(f"PO-{oid}",)).fetchone()[0],1)
+        finally:
+            os.environ.pop("SOMANG_ADMIN_PASSWORD",None)
+            os.environ.pop("SOMANG_SECRET_KEY",None)
 if __name__=="__main__":unittest.main()
