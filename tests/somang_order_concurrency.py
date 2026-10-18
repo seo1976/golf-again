@@ -35,6 +35,13 @@ def main():
                 (member_id,),
             )
 
+    # Safety guard: never run against the Render production membership database.
+    with connect() as guard_db:
+        with guard_db.cursor() as cur:
+            cur.execute("SELECT current_database(), current_user")
+            if cur.fetchone() != ("somang_ci", "somang_ci"):
+                raise RuntimeError("Only disposable somang_ci database is allowed")
+
     locked = threading.Event()
     may_commit = threading.Event()
     checkout_started = threading.Event()
