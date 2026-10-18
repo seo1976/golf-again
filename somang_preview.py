@@ -132,3 +132,12 @@ app.register_blueprint(reports)
 
 from somang_management import manage
 app.register_blueprint(manage)
+
+# Initialize only the dedicated member database schema; never activate signup.
+# Startup remains available if PostgreSQL is temporarily unreachable.
+if os.environ.get("SOMANG_MEMBERS_DATABASE_URL"):
+    try:
+        from somang_member_store import initialize_schema
+        initialize_schema()
+    except Exception:
+        app.logger.warning("Membership schema initialization pending (details withheld)")
