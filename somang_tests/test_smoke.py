@@ -92,6 +92,48 @@ class SomangSmokeTests(unittest.TestCase):
         with __import__("somang_preview").db() as c:
             c.execute("INSERT INTO products(name,category,price,stock,approved,visible) VALUES(?,?,?,?,?,?)",("TEST MEDICINE","일반의약품",100,3,0,0))
         self.assertNotIn(b"TEST MEDICINE",self.client.get("/shop").data)
+    def test_admin_navigation_and_operations_alerts(self):
+        import somang_preview
+        os.environ["SOMANG_ADMIN_PASSWORD"]="unit-test-only-password"
+        os.environ["SOMANG_SECRET_KEY"]="unit-test-only-secret"
+        try:
+            client=somang_preview.app.test_client()
+            with client.session_transaction() as sess:
+                sess["admin"]=True
+                sess["csrf"]="navigation-test-token"
+            with somang_preview.db() as c:
+                c.execute("INSERT INTO products(name,category,price,stock) VALUES(?,?,?,?)",
+                          ("Admin Low Stock Test","화장품",1000,2))
+                sid=c.execute("INSERT INTO suppliers(name) VALUES(?)",
+                              ("Admin Navigation Fake Supplier",)).lastrowid
+                c.execute("INSERT INTO purchase_orders(supplier_id,reference,total) VALUES(?,?,?)",
+                          (sid,"ADMIN-NAV-FAKE",100))
+            home=client.get("/admin")
+            self.assertEqual(home.status_code,200)
+            self.assertIn(b"/admin/ops/customers",home.data)
+            ops=client.get("/admin/ops")
+            self.assertEqual(ops.status_code,200)
+            for route in (b"/admin/members",b"/admin/returns",b"/admin/reports/summary",
+                          b"/admin/ops/stock",b"/admin/ops/lots"):
+                self.assertIn(route,ops.data)
+            self.assertIn("미처리 발주".encode(),ops.data)
+            self.assertIn("재고 3개 이하".encode(),ops.data)
+            self.assertIn("유통기한 경과".encode(),ops.data)
+            for route in ("/admin/ops","/admin/ops/suppliers","/admin/ops/customers",
+                          "/admin/ops/ledger","/admin/ops/stock","/admin/ops/lots",
+                          "/admin/reports/summary","/admin/members","/admin/returns"):
+                self.assertEqual(client.get(route).status_code,200,route)
+            visitor=somang_preview.app.test_client()
+            for route in ("/admin/ops","/admin/ops/suppliers","/admin/ops/customers",
+                          "/admin/ops/ledger","/admin/ops/stock","/admin/ops/lots",
+                          "/admin/reports/summary","/admin/members","/admin/returns"):
+                self.assertEqual(visitor.get(route).status_code,403,route)
+            self.assertEqual(client.post("/admin/ops/customers",
+                data={"csrf":"invalid","alias":"Fake Customer"}).status_code,400)
+        finally:
+            os.environ.pop("SOMANG_ADMIN_PASSWORD",None)
+            os.environ.pop("SOMANG_SECRET_KEY",None)
+
     def test_inventory_adjustment_and_audit(self):
         import somang_preview
         os.environ["SOMANG_ADMIN_PASSWORD"]="unit-test-only-password"
