@@ -84,3 +84,6 @@ def health():return jsonify(status="ok",payments_enabled=False,admin_configured=
 # Isolated operations blueprint; uses the same admin session and demo database.
 from somang_ops import ops
 app.register_blueprint(ops)
+
+from somang_shop import shop
+app.register_blueprint(shop)
