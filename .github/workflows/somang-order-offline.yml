@@ -1,0 +1,33 @@
+name: Somang order offline checks
+
+on:
+  push:
+    branches:
+      - somang-pharmacy-independent-preview
+    paths:
+      - 'somang_order_schema.sql'
+      - 'tests/test_somang_order_*.py'
+      - '.github/workflows/somang-order-offline.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  offline-order-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      SOMANG_ENABLE_REAL_CHECKOUT: '0'
+      ENABLE_AUTO_PROVIDER_ORDER: '0'
+    steps:
+      - name: Check out preview branch
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Verify schema contract (no database)
+        run: python -m unittest discover -s tests -p 'test_somang_order_schema_contract.py' -v
+      - name: Verify fake order lifecycle (in-memory only)
+        run: python -m unittest discover -s tests -p 'test_somang_order_lifecycle_offline.py' -v
