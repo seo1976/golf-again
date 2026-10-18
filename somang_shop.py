@@ -87,10 +87,10 @@ def contents():
 @shop.get("/cart")
 def cart():
     rows,total=contents()
-    body="<div class='warning'>체험용 장바구니 · 실제 결제 불가</div><p><a href='/shop'>← 상품 더 보기</a></p><div class='card'>"
+    body="<div class='warning'>체험용 장바구니 · 실제 결제 불가</div><p><a href='/shop'>← 상품 더 보기</a></p>"+("<div class='card'>" if rows else "<div class='card empty-cart'>")
     for p in rows:
         body+="<div class='cart-line'><div><strong>"+esc(p["name"])+"</strong><p>단가 "+f'{p["price"]:,}'+"원 · 소계 "+f'{p["price"]*p["quantity"]:,}'+"원</p></div><div class='cart-controls'><form action='/cart/update' method='post'><input type='hidden' name='csrf' value='"+csrf()+"'><input type='hidden' name='product_id' value='"+str(p["id"])+"'><label>수량 <input type='number' name='quantity' min='0' max='20' value='"+str(p["quantity"])+"'></label><button>변경</button></form><form action='/cart/remove' method='post'><input type='hidden' name='csrf' value='"+csrf()+"'><input type='hidden' name='product_id' value='"+str(p["id"])+"'><button class='subtle'>삭제</button></form></div></div>"
-    body+="<h2>예상 상품 합계 "+f'{total:,}'+"원</h2><p><small>배송비 미포함 · 실제 판매가가 아닙니다.</small></p>"+("<a class='btn' href='/checkout'>결제 전 주문 확인 →</a>" if rows else "<p>장바구니가 비어 있습니다.</p><a class='btn' href='/shop'>상품 둘러보기</a>")+"</div>"
+    body+="<h2>예상 상품 합계 "+f'{total:,}'+"원</h2><p><small>배송비 미포함 · 실제 판매가가 아닙니다.</small></p>"+("<a class='btn' href='/checkout'>결제 전 주문 확인 →</a>" if rows else "<strong>장바구니가 비어 있습니다.</strong><p>관심 있는 상품을 둘러보고 담아보세요.</p><a class='btn' href='/shop'>상품 둘러보기 →</a>")+"</div>"
     return page("장바구니",body)
 @shop.post("/cart/update")
 def update_cart():
