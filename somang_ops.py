@@ -50,6 +50,13 @@ def suppliers():
         rows=c.execute("SELECT * FROM suppliers ORDER BY id DESC LIMIT 100").fetchall()
         orders=c.execute("SELECT p.id,s.name,p.reference,p.total,p.status FROM purchase_orders p JOIN suppliers s ON s.id=p.supplier_id ORDER BY p.id DESC LIMIT 100").fetchall()
     body="<div class='box'><h2>공급사 등록</h2>"+form("/admin/ops/suppliers","<input name='name' placeholder='공급사명' required maxlength='100'><input name='contact' placeholder='연락처 (테스트용)'><input name='note' placeholder='메모'>","공급사 추가")+"</div><div class='box'><h2>공급사 목록</h2>"+''.join("<p>#"+str(r["id"])+" "+esc(r["name"])+" · "+esc(r["note"])+"</p>" for r in rows)+"</div><div class='box'><h2>발주 초안 작성</h2>"+form("/admin/ops/purchase","<select name='supplier_id'>"+''.join("<option value='"+str(r["id"])+"'>"+esc(r["name"])+"</option>" for r in rows)+"</select><input name='reference' placeholder='발주번호/설명' required><input type='number' name='total' min='0' placeholder='발주금액' required>","발주 초안 저장")+"</div><div class='box'><h2>발주 목록</h2>"+''.join("<p>#"+str(r[0])+" "+esc(r[1])+" · "+esc(r[2])+" · "+str(r[3])+"원 · "+esc(r[4])+"</p>" for r in orders)+"</div>"
+    with conn() as c:
+        products=c.execute("SELECT id,name FROM products ORDER BY id DESC LIMIT 100").fetchall()
+    draft_options="".join("<option value='"+str(r[0])+"'>#"+str(r[0])+" "+esc(r[2])+"</option>" for r in orders if r[4]=="draft")
+    product_options="".join("<option value='"+str(p[0])+"'>"+esc(p[1])+"</option>" for p in products)
+    if draft_options and product_options:
+        fields="<select name='order_id'>"+draft_options+"</select><select name='product_id'>"+product_options+"</select><input type='number' name='quantity' min='1' required placeholder='입고 수량'>"
+        body+="<div class='box'><h2>발주 입고 확정 (테스트)</h2><p>현재 발주 1건당 상품 1종만 입고 처리할 수 있습니다. 재고와 매입 장부가 동시에 반영됩니다.</p>"+form("/admin/ops/purchase/receive",fields,"입고 확정")+"</div>"
     return layout("공급사 및 발주",body)
 @ops.post("/purchase")
 def purchase():
