@@ -13,7 +13,7 @@ SCHEMA = (Path(__file__).resolve().parents[1] / "somang_order_schema.sql").read_
 class OrderSchemaContractTests(unittest.TestCase):
     def test_three_distinct_tables(self):
         for table in ("somang_shipping_addresses", "somang_orders", "somang_order_items"):
-            self.assertRegex(SCHEMA, rf"CREATE TABLE IF NOT EXISTS {table}\\s*\\(")
+            self.assertRegex(SCHEMA, rf"CREATE TABLE IF NOT EXISTS {table}\s*\(")
 
     def test_order_and_item_amount_constraints(self):
         for rule in (
@@ -35,7 +35,7 @@ class OrderSchemaContractTests(unittest.TestCase):
     def test_lifecycle_and_shipping_fields(self):
         for field in ("order_status", "payment_status", "shipping_status",
                       "courier_name", "tracking_number", "shipped_at", "delivered_at"):
-            self.assertRegex(SCHEMA, rf"\\b{field}\\b")
+            self.assertRegex(SCHEMA, rf"\b{field}\b")
 
     def test_schema_does_not_enable_payments(self):
         self.assertNotIn("CREATE TRIGGER", SCHEMA)
