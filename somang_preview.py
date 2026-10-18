@@ -28,7 +28,7 @@ def admin():
 @app.get("/")
 def home():
     with db() as c: items=[dict(r) for r in c.execute("SELECT * FROM products WHERE approved=1 AND visible=1 AND stock>0 ORDER BY id DESC LIMIT 100")]
-    body="""<section class='somang-hero'><div><div class='tag'>서울 종로구 창신동 · SOMANG PHARMACY</div><h1>우리 동네 가까운 약국,<br>소망약국</h1><p>종로 335, 1층에 위치한 소망약국입니다.<br>방문 전 약국 정보를 확인하세요.</p><div class='somang-actions'><a href='#info'>방문 안내</a><a class='secondary' href='tel:027420075'>전화 문의</a></div></div><div class='somang-photo-panel somang-photo-placeholder' role='img' aria-label='소망약국 안내 일러스트'><div class='somang-photo-mark'>✚</div><strong>소망약국</strong><p>SOMANG PHARMACY · 건강한 일상의 가까운 이웃</p></div></section><main><h2 id='products'>온라인 스토어</h2><p class='muted'>승인된 온라인 판매 가능 상품만 노출됩니다.</p><div class='grid'>"""
+    body="""<section class='somang-hero'><div><div class='tag'>서울 종로구 창신동 · SOMANG PHARMACY</div><h1>우리 동네 가까운 약국,<br>소망약국</h1><p>종로 335, 1층에 위치한 소망약국입니다.<br>방문 전 약국 정보를 확인하세요.</p><div class='somang-actions'><a href='#info' onclick="document.getElementById('info').open=true">방문 안내</a><a class='secondary' href='tel:027420075'>전화 문의</a></div></div><div class='somang-photo-panel somang-photo-placeholder' role='img' aria-label='소망약국 안내 일러스트'><div class='somang-photo-mark'>✚</div><strong>소망약국</strong><p>SOMANG PHARMACY · 건강한 일상의 가까운 이웃</p></div></section><main><h2 id='products'>온라인 스토어</h2><p class='muted'>승인된 온라인 판매 가능 상품만 노출됩니다.</p><div class='grid'>"""
     for p in items:
         from markupsafe import escape
         body+=f"<div class='card'><span class='tag'>{escape(p['category'])}</span><h3>{escape(p['name'])}</h3><p>{escape(p['description'])}</p><strong>{p['price']:,}원</strong><p class='muted'>재고 {p['stock']}개</p><p class='tag'>결제 연결 준비 중</p></div>"
