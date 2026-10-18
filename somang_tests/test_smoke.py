@@ -138,4 +138,25 @@ class SomangSmokeTests(unittest.TestCase):
         finally:
             os.environ.pop("SOMANG_ADMIN_PASSWORD",None)
             os.environ.pop("SOMANG_SECRET_KEY",None)
+    def test_lot_disposal_audit(self):
+        import somang_preview
+        os.environ["SOMANG_ADMIN_PASSWORD"]="unit-test-only-password"
+        os.environ["SOMANG_SECRET_KEY"]="unit-test-only-secret"
+        try:
+            with somang_preview.db() as c:
+                pid=c.execute("INSERT INTO products(name,category,price,stock) VALUES(?,?,?,?)",("Disposal Test","화장품",1000,4)).lastrowid
+                lid=c.execute("INSERT INTO inventory_lots(product_id,lot_code,expiry_date,quantity) VALUES(?,?,?,?)",(pid,"DISP","2020-01-01",4)).lastrowid
+            with self.client.session_transaction() as sess:
+                sess["admin"]=True
+                sess["csrf"]="test-token"
+            data={"csrf":"test-token","lot_id":lid,"quantity":2,"reason":"expired"}
+            self.assertEqual(self.client.post("/admin/ops/lots/dispose",data=data).status_code,302)
+            self.assertEqual(self.client.post("/admin/ops/lots/dispose",data={**data,"quantity":5}).status_code,409)
+            with somang_preview.db() as c:
+                self.assertEqual(c.execute("SELECT stock FROM products WHERE id=?",(pid,)).fetchone()[0],2)
+                self.assertEqual(c.execute("SELECT quantity FROM inventory_lots WHERE id=?",(lid,)).fetchone()[0],2)
+                self.assertEqual(c.execute("SELECT COUNT(*) FROM inventory_disposals WHERE lot_id=?",(lid,)).fetchone()[0],1)
+        finally:
+            os.environ.pop("SOMANG_ADMIN_PASSWORD",None)
+            os.environ.pop("SOMANG_SECRET_KEY",None)
 if __name__=="__main__":unittest.main()
