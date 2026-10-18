@@ -118,4 +118,24 @@ class SomangSmokeTests(unittest.TestCase):
         finally:
             os.environ.pop("SOMANG_ADMIN_PASSWORD",None)
             os.environ.pop("SOMANG_SECRET_KEY",None)
+    def test_lot_dispatch_expiry_guard(self):
+        import somang_preview
+        os.environ["SOMANG_ADMIN_PASSWORD"]="unit-test-only-password"
+        os.environ["SOMANG_SECRET_KEY"]="unit-test-only-secret"
+        try:
+            with somang_preview.db() as c:
+                pid=c.execute("INSERT INTO products(name,category,price,stock) VALUES(?,?,?,?)",("Dispatch Test","화장품",1000,8)).lastrowid
+                lid=c.execute("INSERT INTO inventory_lots(product_id,lot_code,expiry_date,quantity) VALUES(?,?,?,?)",(pid,"VALID","2099-01-01",5)).lastrowid
+                expired=c.execute("INSERT INTO inventory_lots(product_id,lot_code,expiry_date,quantity) VALUES(?,?,?,?)",(pid,"EXPIRED","2020-01-01",3)).lastrowid
+            with self.client.session_transaction() as sess:
+                sess["admin"]=True
+                sess["csrf"]="test-token"
+            self.assertEqual(self.client.post("/admin/ops/lots/dispatch",data={"csrf":"test-token","lot_id":expired,"quantity":1}).status_code,409)
+            self.assertEqual(self.client.post("/admin/ops/lots/dispatch",data={"csrf":"test-token","lot_id":lid,"quantity":2}).status_code,302)
+            with somang_preview.db() as c:
+                self.assertEqual(c.execute("SELECT stock FROM products WHERE id=?",(pid,)).fetchone()[0],6)
+                self.assertEqual(c.execute("SELECT quantity FROM inventory_lots WHERE id=?",(lid,)).fetchone()[0],3)
+        finally:
+            os.environ.pop("SOMANG_ADMIN_PASSWORD",None)
+            os.environ.pop("SOMANG_SECRET_KEY",None)
 if __name__=="__main__":unittest.main()
