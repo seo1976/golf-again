@@ -37,6 +37,27 @@ class SomangSmokeTests(unittest.TestCase):
         self.assertEqual(client.post("/demo/logout",data={"csrf":"demo-test-token"}).status_code,302)
         self.assertIn("회원 로그인 체험".encode("utf-8"),client.get("/account").data)
         self.assertIn("18,900원".encode("utf-8"),client.get("/cart").data)
+    def test_member_and_return_admin_protection(self):
+        self.assertEqual(self.client.get("/admin/members").status_code,403)
+        self.assertEqual(self.client.get("/admin/returns").status_code,403)
+        self.assertEqual(self.client.post("/admin/returns",data={}).status_code,403)
+        self.assertEqual(self.client.get("/policy/returns").status_code,200)
+    def test_admin_return_draft_workflow(self):
+        os.environ["SOMANG_ADMIN_PASSWORD"]="unit-test-only-password"
+        os.environ["SOMANG_SECRET_KEY"]="unit-test-only-secret"
+        try:
+            client=__import__("somang_preview").app.test_client()
+            with client.session_transaction() as sess:
+                sess["admin"]=True
+                sess["csrf"]="admin-test-token"
+            self.assertEqual(client.get("/admin/members").status_code,200)
+            self.assertEqual(client.get("/admin/returns").status_code,200)
+            self.assertEqual(client.post("/admin/returns",data={"csrf":"wrong","reference":"TEST-1","category":"반품","reason":"test"}).status_code,400)
+            self.assertEqual(client.post("/admin/returns",data={"csrf":"admin-test-token","reference":"TEST-1","category":"반품","reason":"sample return"}).status_code,302)
+            self.assertIn(b"TEST-1",client.get("/admin/returns").data)
+        finally:
+            os.environ.pop("SOMANG_ADMIN_PASSWORD",None)
+            os.environ.pop("SOMANG_SECRET_KEY",None)
     def test_payment_blocked(self):
         self.assertEqual(self.client.post("/payments/start").status_code,503)
         r=self.client.get("/payments/readiness")
