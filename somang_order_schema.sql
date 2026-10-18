@@ -2,7 +2,7 @@
 -- Do not run against production until privacy, retention and checkout are approved.
 CREATE TABLE IF NOT EXISTS somang_shipping_addresses (
  id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
- member_id BIGINT REFERENCES members(id) ON DELETE SET NULL,
+ member_id BIGINT NOT NULL REFERENCES members(id) ON DELETE CASCADE,
  recipient_name TEXT NOT NULL,
  recipient_phone TEXT NOT NULL,
  postal_code VARCHAR(12) NOT NULL CHECK(length(trim(postal_code)) BETWEEN 5 AND 12),
@@ -54,6 +54,9 @@ CREATE TABLE IF NOT EXISTS somang_order_items (
  line_total_krw BIGINT NOT NULL CHECK(line_total_krw=unit_price_krw*quantity)
 );
 CREATE INDEX IF NOT EXISTS somang_order_items_order_idx ON somang_order_items(order_id);
+-- Saved addresses must not outlive a hard-deleted member; soft account deletion
+-- still needs an explicit address purge workflow before production activation.
+-- Historical order snapshots have separate legal retention requirements.
 -- Draft only. Before migration: backup, consent/version capture, retention/deletion policy,
 -- role-based access, encryption, privacy review, transactional integrity and payment webhook verification.
 -- Member FK requires somang_member_schema.sql to be applied first.
