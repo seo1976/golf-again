@@ -7,6 +7,7 @@ on:
     paths:
       - 'somang_order_schema.sql'
       - 'somang_order_store.py'
+      - 'somang_order_auth.py'
       - 'tests/test_somang_order_*.py'
       - 'tests/somang_order_postgres_smoke.sql'
       - 'somang_member_schema.sql'
@@ -50,6 +51,8 @@ jobs:
         run: python -m unittest discover -s tests -p 'test_somang_order_lifecycle_offline.py' -v
       - name: Verify owner-scoped order access remains gated
         run: python -m unittest discover -s tests -p 'test_somang_order_access.py' -v
+      - name: Verify member session authorization boundary
+        run: python -m unittest discover -s tests -p 'test_somang_order_auth.py' -v
       - name: Test PostgreSQL schema and synthetic order lifecycle
         env:
           PGPASSWORD: ci-only-test-password
