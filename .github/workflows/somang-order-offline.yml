@@ -7,6 +7,8 @@ on:
     paths:
       - 'somang_order_schema.sql'
       - 'tests/test_somang_order_*.py'
+      - 'tests/somang_order_postgres_smoke.sql'
+      - 'somang_member_schema.sql'
       - '.github/workflows/somang-order-offline.yml'
   workflow_dispatch:
 
@@ -17,6 +19,20 @@ jobs:
   offline-order-tests:
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: somang_ci
+          POSTGRES_PASSWORD: ci-only-test-password
+          POSTGRES_DB: somang_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd 'pg_isready -U somang_ci -d somang_ci'
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     env:
       SOMANG_ENABLE_REAL_CHECKOUT: '0'
       ENABLE_AUTO_PROVIDER_ORDER: '0'
@@ -31,3 +47,14 @@ jobs:
         run: python -m unittest discover -s tests -p 'test_somang_order_schema_contract.py' -v
       - name: Verify fake order lifecycle (in-memory only)
         run: python -m unittest discover -s tests -p 'test_somang_order_lifecycle_offline.py' -v
+      - name: Test PostgreSQL schema and synthetic order lifecycle
+        env:
+          PGPASSWORD: ci-only-test-password
+        run: |
+          if ! command -v psql >/dev/null 2>&1; then
+            sudo apt-get update -qq
+            sudo apt-get install -y postgresql-client
+          fi
+          psql -h localhost -U somang_ci -d somang_ci -v ON_ERROR_STOP=1 -f somang_member_schema.sql
+          psql -h localhost -U somang_ci -d somang_ci -v ON_ERROR_STOP=1 -f somang_order_schema.sql
+          psql -h localhost -U somang_ci -d somang_ci -v ON_ERROR_STOP=1 -f tests/somang_order_postgres_smoke.sql
