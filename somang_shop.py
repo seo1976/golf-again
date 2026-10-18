@@ -36,16 +36,24 @@ def product_rows():
 def catalog():
     keyword=request.args.get("q","").strip()[:60]
     category=request.args.get("category","").strip()[:60]
+    sort=request.args.get("sort","recommended")
+    if sort not in ("recommended","price_asc","price_desc","name"):sort="recommended"
     all_products=DEMO_PRODUCTS+product_rows()
     categories=sorted(set(p["category"] for p in all_products))
     if category and category not in categories:category=""
     selected=[p for p in all_products if (not category or p["category"]==category) and (not keyword or keyword.casefold() in (p["name"]+" "+p["description"]+" "+p["category"]).casefold())]
+    if sort=="price_asc":selected.sort(key=lambda p:(p["price"],p["name"]))
+    elif sort=="price_desc":selected.sort(key=lambda p:(-p["price"],p["name"]))
+    elif sort=="name":selected.sort(key=lambda p:p["name"])
     body="<div class='warning'>체험용 가상 상품입니다. 가격은 예시이며 실제 주문·결제는 불가능합니다.</div><form method='get' action='/shop' class='shop-search'><label>상품 검색 <input type='search' name='q' value='"+esc(keyword)+"' placeholder='예: 보습, 샴푸'></label><label>카테고리 <select name='category'><option value=''>전체 상품</option>"
     for c in categories:
         body+="<option value='"+esc(c)+"'"+(" selected" if c==category else "")+">"+esc(c)+"</option>"
+    body+="</select></label><label>정렬 <select name='sort'>"
+    for key,label in (("recommended","기본순"),("price_asc","낮은 가격순"),("price_desc","높은 가격순"),("name","상품명순")):
+        body+="<option value='"+key+"'"+(" selected" if sort==key else "")+">"+label+"</option>"
     body+="</select></label><button>검색</button><a href='/shop'>초기화</a></form><p><small>검색 결과 "+str(len(selected))+"개 · <a href='/cart'>장바구니 보기 →</a></small></p><div class='demo-grid'>"
     for p in selected:
-        body+="<article class='card product-card'><div class='product-art'>"+p.get("emoji","🛍️")+"</div><div class='product-info'><small>"+esc(p["category"])+" · "+("체험 상품" if p["id"] in DEMO_BY_ID else "등록 상품")+"</small><h2>"+esc(p["name"])+"</h2><p>"+esc(p["description"])+"</p><strong>"+f'{p["price"]:,}'+"원</strong><form action='/cart/add' method='post'><input type='hidden' name='csrf' value='"+csrf()+"'><input type='hidden' name='product_id' value='"+str(p["id"])+"'><label>수량 <input type='number' name='quantity' min='1' max='20' value='1'></label><button>장바구니 담기</button></form></div></article>"
+        body+="<article class='card product-card'><div class='product-art'>"+p.get("emoji","🛍️")+"</div><div class='product-info'><small>"+esc(p["category"])+" · "+("체험 상품" if p["id"] in DEMO_BY_ID else "등록 상품")+"</small><h2>"+esc(p["name"])+"</h2><p>"+esc(p["description"])+"</p><strong>"+f'{p["price"]:,}'+"원</strong><p><small>재고 "+str(p["stock"])+"개 · 체험 전시 상품</small></p><form action='/cart/add' method='post'><input type='hidden' name='csrf' value='"+csrf()+"'><input type='hidden' name='product_id' value='"+str(p["id"])+"'><label>수량 <input type='number' name='quantity' min='1' max='20' value='1'></label><button>장바구니 담기</button></form></div></article>"
     if not selected:body+="<p>조건에 맞는 상품이 없습니다. <a href='/shop'>전체 상품 보기</a></p>"
     body+="</div><p><a class='btn' href='/cart'>장바구니 확인 →</a></p>"
     return page("상품 둘러보기",body)
