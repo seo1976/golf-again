@@ -135,7 +135,7 @@ def membership_connection_status():
                     connected = cur.fetchone()[0] == 1
         except Exception:
             connected = False
-    return jsonify(database_configured=somang_member_store.configured(),database_reachable=connected,real_registration_enabled=False,email_verification_enabled=False,preview_only=True)
+    return jsonify(database_configured=somang_member_store.configured(),database_reachable=connected,member_schema_ready=somang_member_store.schema_ready() if connected else False,real_registration_enabled=False,email_verification_enabled=False,preview_only=True)
 @shop.post("/demo/register")
 def demo_register():
     check()
