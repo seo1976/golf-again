@@ -12,6 +12,7 @@ on:
       - 'tests/test_somang_member_privacy.py'
       - 'tests/test_somang_order_*.py'
       - 'tests/somang_order_postgres_smoke.sql'
+      - 'tests/somang_order_concurrency.py'
       - 'somang_member_schema.sql'
       - '.github/workflows/somang-order-offline.yml'
   workflow_dispatch:
@@ -68,3 +69,9 @@ jobs:
           psql -h localhost -U somang_ci -d somang_ci -v ON_ERROR_STOP=1 -f somang_member_schema.sql
           psql -h localhost -U somang_ci -d somang_ci -v ON_ERROR_STOP=1 -f somang_order_schema.sql
           psql -h localhost -U somang_ci -d somang_ci -v ON_ERROR_STOP=1 -f tests/somang_order_postgres_smoke.sql
+      - name: Verify concurrent deletion blocks a new order
+        env:
+          SOMANG_CI_DATABASE_URL: postgresql://somang_ci:ci-only-test-password@localhost:5432/somang_ci
+        run: |
+          python -m pip install 'psycopg[binary]>=3.2,<4'
+          python tests/somang_order_concurrency.py
