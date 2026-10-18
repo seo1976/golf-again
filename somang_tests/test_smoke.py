@@ -21,6 +21,22 @@ class SomangSmokeTests(unittest.TestCase):
         self.assertEqual(self.client.get("/shop").status_code,200)
         self.assertEqual(self.client.get("/cart").status_code,200)
         self.assertEqual(self.client.get("/checkout").status_code,302)
+    def test_demo_member_cart_and_checkout_flow(self):
+        client=__import__("somang_preview").app.test_client()
+        with client.session_transaction() as sess:
+            sess["csrf"]="demo-test-token"
+        self.assertEqual(client.get("/account").status_code,200)
+        self.assertEqual(client.post("/demo/login",data={"csrf":"wrong"}).status_code,400)
+        self.assertEqual(client.post("/demo/login",data={"csrf":"demo-test-token"}).status_code,302)
+        self.assertIn("체험 회원으로 로그인 중".encode("utf-8"),client.get("/account").data)
+        self.assertEqual(client.post("/cart/add",data={"csrf":"demo-test-token","product_id":900001,"quantity":2}).status_code,302)
+        self.assertIn("37,800원".encode("utf-8"),client.get("/cart").data)
+        self.assertEqual(client.post("/cart/update",data={"csrf":"demo-test-token","product_id":900001,"quantity":1}).status_code,302)
+        self.assertIn("18,900원".encode("utf-8"),client.get("/checkout").data)
+        self.assertIn("결제하기 (준비 중)".encode("utf-8"),client.get("/checkout").data)
+        self.assertEqual(client.post("/demo/logout",data={"csrf":"demo-test-token"}).status_code,302)
+        self.assertIn("회원 로그인 체험".encode("utf-8"),client.get("/account").data)
+        self.assertIn("18,900원".encode("utf-8"),client.get("/cart").data)
     def test_payment_blocked(self):
         self.assertEqual(self.client.post("/payments/start").status_code,503)
         r=self.client.get("/payments/readiness")
