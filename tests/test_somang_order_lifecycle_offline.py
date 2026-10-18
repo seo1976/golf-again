@@ -85,6 +85,35 @@ class OfflineOrderLifecycleTests(unittest.TestCase):
             save_sample_order(self.db, "SAMPLE-004", [("샘플", 0, 1000)], 0)
         self.assertEqual(self.db.execute("SELECT COUNT(*) FROM orders").fetchone()[0], 0)
 
+    def test_negative_shipping_fee_rejected(self):
+        with self.assertRaises(ValueError):
+            save_sample_order(self.db, "SAMPLE-NEG-SHIP", [("샘플", 1, 1000)], -1)
+        self.assertEqual(self.db.execute("SELECT COUNT(*) FROM orders").fetchone()[0], 0)
+
+    def test_negative_item_price_rejected(self):
+        with self.assertRaises(ValueError):
+            save_sample_order(self.db, "SAMPLE-NEG-PRICE", [("샘플", 1, -100)], 0)
+        self.assertEqual(self.db.execute("SELECT COUNT(*) FROM orders").fetchone()[0], 0)
+
+    def test_empty_order_rejected(self):
+        with self.assertRaises(ValueError):
+            save_sample_order(self.db, "SAMPLE-EMPTY", [], 0)
+        self.assertEqual(self.db.execute("SELECT COUNT(*) FROM orders").fetchone()[0], 0)
+
+    def test_cancel_only_pending_order(self):
+        order_id = save_sample_order(self.db, "SAMPLE-CONFIRMED", [("샘플", 1, 1000)], 0)
+        with self.db:
+            self.db.execute("UPDATE orders SET status='confirmed' WHERE id=?", (order_id,))
+            changed = self.db.execute(
+                "UPDATE orders SET status='cancelled' WHERE id=? AND status='pending'",
+                (order_id,),
+            ).rowcount
+        self.assertEqual(changed, 0)
+        self.assertEqual(
+            self.db.execute("SELECT status FROM orders WHERE id=?", (order_id,)).fetchone()[0],
+            "confirmed",
+        )
+
     def test_total_mismatch_is_rejected(self):
         with self.assertRaises(sqlite3.IntegrityError):
             with self.db:
