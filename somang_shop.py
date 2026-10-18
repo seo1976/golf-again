@@ -126,7 +126,16 @@ def account():
 def membership_connection_status():
     """Configuration-only status; never exposes database credentials."""
     import somang_member_store
-    return jsonify(database_configured=somang_member_store.configured(),real_registration_enabled=False,email_verification_enabled=False,preview_only=True)
+    connected = False
+    if somang_member_store.configured():
+        try:
+            with somang_member_store.connect() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("SELECT 1")
+                    connected = cur.fetchone()[0] == 1
+        except Exception:
+            connected = False
+    return jsonify(database_configured=somang_member_store.configured(),database_reachable=connected,real_registration_enabled=False,email_verification_enabled=False,preview_only=True)
 @shop.post("/demo/register")
 def demo_register():
     check()
