@@ -71,7 +71,15 @@ def stock(pid):
     try:qty=int(request.form.get("stock",""))
     except ValueError:abort(400)
     if qty<0:abort(400)
-    with db() as c:c.execute("UPDATE products SET stock=? WHERE id=?",(qty,pid))
+    with db() as c:
+        c.execute("BEGIN IMMEDIATE")
+        previous=c.execute("SELECT stock FROM products WHERE id=?",(pid,)).fetchone()
+        if previous is None:abort(404)
+        delta=qty-previous["stock"]
+        if delta:
+            c.execute("UPDATE products SET stock=? WHERE id=?",(qty,pid))
+            c.execute("INSERT INTO stock_movements(product_id,change_qty,reason) VALUES(?,?,?)",(pid,delta,"관리자 직접 재고 수정"))
+            c.execute("INSERT INTO ops_audit(action,details) VALUES(?,?)",("stock.admin_update",f"product={pid},delta={delta}"))
     return redirect("/admin")
 @app.post("/admin/products/<int:pid>/hide")
 def hide(pid):
