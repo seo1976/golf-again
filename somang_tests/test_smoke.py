@@ -106,4 +106,16 @@ class SomangSmokeTests(unittest.TestCase):
         finally:
             os.environ.pop("SOMANG_ADMIN_PASSWORD",None)
             os.environ.pop("SOMANG_SECRET_KEY",None)
+    def test_lot_expiry_dashboard(self):
+        os.environ["SOMANG_ADMIN_PASSWORD"]="unit-test-only-password"
+        os.environ["SOMANG_SECRET_KEY"]="unit-test-only-secret"
+        try:
+            with self.client.session_transaction() as sess:
+                sess["admin"]=True
+            r=self.client.get("/admin/ops/lots")
+            self.assertEqual(r.status_code,200)
+            self.assertIn("30일 이내".encode("utf-8"),r.data)
+        finally:
+            os.environ.pop("SOMANG_ADMIN_PASSWORD",None)
+            os.environ.pop("SOMANG_SECRET_KEY",None)
 if __name__=="__main__":unittest.main()
