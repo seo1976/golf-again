@@ -25,7 +25,8 @@ class OrderSchemaContractTests(unittest.TestCase):
             self.assertIn(rule, SCHEMA)
 
     def test_member_and_order_references(self):
-        self.assertGreaterEqual(SCHEMA.count("REFERENCES members(id) ON DELETE SET NULL"), 2)
+        self.assertIn("member_id BIGINT NOT NULL REFERENCES members(id) ON DELETE CASCADE", SCHEMA)
+        self.assertIn("member_id BIGINT REFERENCES members(id) ON DELETE SET NULL", SCHEMA)
         self.assertIn("REFERENCES somang_orders(id) ON DELETE RESTRICT", SCHEMA)
 
     def test_only_one_active_default_address_per_member(self):
