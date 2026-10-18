@@ -93,3 +93,6 @@ app.register_blueprint(payment)
 
 from somang_launch import launch
 app.register_blueprint(launch)
+
+from somang_reports import reports
+app.register_blueprint(reports)
