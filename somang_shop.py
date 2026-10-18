@@ -116,12 +116,20 @@ def account():
             session.pop("member_id",None)
             return redirect("/account")
         return page("내 계정","<div class='card'>로그인 상태입니다.<form method='post' action='/logout'><input type='hidden' name='csrf' value='"+csrf()+"'><button>로그아웃</button></form></div>")
-    body="<div class='warning'>현재는 미리보기 사이트입니다. 실제 고객 회원가입·로그인은 영구 데이터베이스와 개인정보 보호 준비 전까지 비활성화됩니다.</div><div class='card'><h2>회원 로그인 체험</h2><p>개인정보 입력 없이 회원 화면과 장바구니 연결을 체험해 보세요.</p><form method='post' action='/demo/login'><input type='hidden' name='csrf' value='"+csrf()+"'><button>체험 회원으로 로그인</button></form></div>"
+    body="<div class='warning'>현재는 미리보기 사이트입니다. 정식 고객 회원가입·로그인은 영구 데이터베이스와 개인정보 보호 준비 전까지 비활성화됩니다.</div><div class='card'><h2>체험 회원가입</h2><p>이름·이메일·전화번호 없이 별명만 정해 회원가입 화면을 체험할 수 있어요. 입력한 별명은 브라우저 세션에만 보관됩니다.</p><form method='post' action='/demo/register'><input type='hidden' name='csrf' value='"+csrf()+"'><label for='demo-nickname'>체험 별명</label><input id='demo-nickname' name='nickname' maxlength='16' minlength='2' pattern='[A-Za-z0-9가-힣_-]{2,16}' placeholder='예: 소망손님' autocomplete='off' required><button type='submit'>체험 회원가입</button></form><p><small>실명이나 개인정보는 입력하지 마세요. 체험 계정은 영구 저장되지 않습니다.</small></p></div><div class='card'><h2>체험 회원 로그인</h2><p>개인정보 입력 없이 회원 화면과 장바구니 연결을 체험해 보세요.</p><form method='post' action='/demo/login'><input type='hidden' name='csrf' value='"+csrf()+"'><button>체험 회원으로 로그인</button></form></div>"
     if os.environ.get("SOMANG_ENABLE_DEMO_REGISTRATION")=="1":
         body+="<div class='card'><h2>테스트 회원가입</h2>"+auth_form("/register","테스트 가입")+"</div><div class='card'><h2>테스트 회원 로그인</h2>"+auth_form("/login","테스트 로그인")+"</div>"
     else:
         body+="<div class='card member-coming-soon'><h2>소망약국 회원가입</h2><p>정식 회원가입을 준비하고 있습니다. 고객정보를 안전하게 보관할 수 있는 저장 환경이 구축되면 이메일 회원가입을 제공할 예정입니다.</p><div class='member-benefits'><span>✓ 회원 계정 관리</span><span>✓ 장바구니 이용</span><span>✓ 주문 내역 확인 (판매 개시 후)</span></div><p><small>현재는 체험 단계입니다. 실제 이메일·비밀번호·전화번호를 입력하지 마세요.</small></p><button type='button' disabled aria-label='정식 회원가입 준비 중'>정식 회원가입 준비 중</button></div>"
     return page("회원 로그인 · 회원가입",body)
+@shop.post("/demo/register")
+def demo_register():
+    check()
+    nickname=request.form.get("nickname","").strip()
+    if not re.fullmatch(r"[A-Za-z0-9가-힣_-]{2,16}",nickname):abort(400)
+    session["demo_member"]=True
+    session["demo_nickname"]=nickname
+    return redirect("/account")
 @shop.post("/demo/login")
 def demo_login():
     check()
@@ -131,6 +139,7 @@ def demo_login():
 def demo_logout():
     check()
     session.pop("demo_member",None)
+    session.pop("demo_nickname",None)
     return redirect("/account")
 def auth_form(action,label):
     return "<form action='"+action+"' method='post'><input type='hidden' name='csrf' value='"+csrf()+"'><label>테스트 이메일 <input type='email' name='email' maxlength='150' required></label><label>비밀번호 (12자 이상) <input type='password' name='password' minlength='12' required></label><button>"+label+"</button></form>"
