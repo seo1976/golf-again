@@ -27,7 +27,7 @@ class SomangSmokeTests(unittest.TestCase):
         self.assertFalse(r.json["checkout_enabled"])
     def test_registration_disabled(self):
         r=self.client.get("/account")
-        self.assertIn("비활성화".encode(),r.data) if False else self.assertEqual(r.status_code,200)
+        self.assertEqual(r.status_code,200)
         self.assertEqual(self.client.post("/register").status_code,503)
     def test_admin_protected(self):
         self.assertEqual(self.client.get("/admin/ops").status_code,403)
