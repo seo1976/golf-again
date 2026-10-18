@@ -120,7 +120,7 @@ def account():
     if os.environ.get("SOMANG_ENABLE_DEMO_REGISTRATION")=="1":
         body+="<div class='card'><h2>테스트 회원가입</h2>"+auth_form("/register","테스트 가입")+"</div><div class='card'><h2>테스트 회원 로그인</h2>"+auth_form("/login","테스트 로그인")+"</div>"
     else:
-        body+="<div class='card member-coming-soon'><h2>소망약국 회원가입</h2><p>정식 회원가입을 준비하고 있습니다. 고객정보를 안전하게 보관할 수 있는 저장 환경이 구축되면 이메일 회원가입을 제공할 예정입니다.</p><div class='member-benefits'><span>✓ 회원 계정 관리</span><span>✓ 장바구니 이용</span><span>✓ 주문 내역 확인 (판매 개시 후)</span></div><p><small>현재는 체험 단계입니다. 실제 이메일·비밀번호·전화번호를 입력하지 마세요.</small></p><button type='button' disabled aria-label='정식 회원가입 준비 중'>정식 회원가입 준비 중</button></div>"
+        body+="<div class='card member-coming-soon'><h2>소망약국 회원가입</h2><p>정식 회원가입을 준비하고 있습니다. 고객정보를 안전하게 보관할 수 있는 저장 환경이 구축되면 이메일 회원가입을 제공할 예정입니다.</p><div class='member-benefits'><span>✓ 회원 계정 관리</span><span>✓ 장바구니 이용</span><span>✓ 주문 내역 확인 (판매 개시 후)</span></div><p><small>현재는 체험 단계입니다. 실제 이메일·비밀번호·전화번호를 입력하지 마세요.</small></p><details class='demo-profile'><summary>정식 회원가입 화면 미리 체험하기</summary><p><small>화면 확인 전용입니다. 입력값은 서버로 전송하지 않으며 계정이 생성되지 않습니다. 실제 이메일이나 비밀번호를 입력하지 마세요.</small></p><form onsubmit='return false'><label>이메일 (예시만 입력)<input type='text' placeholder='example@example.com' autocomplete='off'></label><label>비밀번호 (예시만 입력)<input type='text' placeholder='12자 이상 예시' autocomplete='off'></label><button type='button' disabled>정식 가입은 보안 검증 후 가능</button></form></details></div>"
     return page("회원 로그인 · 회원가입",body)
 @shop.post("/demo/register")
 def demo_register():
