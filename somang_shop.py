@@ -44,7 +44,7 @@ def product_detail(pid):
     p=find_product(pid)
     if not p:abort(404)
     available=p["stock"]>0
-    body="<p><a href='/shop'>← 상품 목록으로</a></p><div class='card'><div class='product-art' style='height:180px'>"+esc(p.get("emoji","🛍️"))+"</div><h2><a href='/shop/product/"+str(p["id"])+"'>"+esc(p["name"])+"</a></h2><p>"+esc(p["category"])+"</p><p>"+esc(p["description"])+"</p><strong>"+f'{p["price"]:,}'+"원</strong><p>"+("재고 "+str(p["stock"])+"개" if available else "품절")+"</p>"
+    body="<p><a href='/shop'>← 상품 목록으로</a></p><div class='card'><div class='product-art' style='height:180px'>"+esc(p.get("emoji","🛍️"))+"</div><h2>"+esc(p["name"])+"</h2><p>"+esc(p["category"])+"</p><p>"+esc(p["description"])+"</p><strong>"+f'{p["price"]:,}'+"원</strong><p>"+("재고 "+str(p["stock"])+"개" if available else "품절")+"</p>"
     if available:
         body+="<form action='/cart/add' method='post'><input type='hidden' name='csrf' value='"+csrf()+"'><input type='hidden' name='product_id' value='"+str(pid)+"'><label>수량 <input type='number' name='quantity' min='1' max='"+str(min(20,p["stock"]))+"' value='1' required></label><button>장바구니 담기</button></form>"
     body+="<p><small>현재는 상품 체험용 미리보기이며 실제 주문·결제는 불가능합니다.</small></p></div>"
@@ -102,7 +102,7 @@ def contents():
             except (ValueError,TypeError):continue
             if pid in DEMO_BY_ID:p=DEMO_BY_ID[pid]
             else:p=c.execute("SELECT id,name,price,stock FROM products WHERE id=? AND approved=1 AND visible=1 AND stock>0",(pid,)).fetchone()
-            if p and qty>0:
+            if p and qty>0 and p["stock"]>0:
                 qty=min(qty,p["stock"],20);row=dict(p);row["quantity"]=qty;rows.append(row);total+=row["price"]*qty
     return rows,total
 @shop.get("/cart")
