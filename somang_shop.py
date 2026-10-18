@@ -5,6 +5,8 @@ import os, sqlite3, secrets, hmac, re, html
 from werkzeug.security import generate_password_hash, check_password_hash
 from flask import Blueprint, request, session, redirect, abort, jsonify
 shop=Blueprint("somang_shop",__name__)
+DEMO_PRODUCTS=[{"id":900001,"name":"수분 보습 크림 50ml","category":"더마 화장품","description":"보습 크림 예시","price":18900,"stock":99,"emoji":"🧴"},{"id":900002,"name":"저자극 클렌징 젤 200ml","category":"더마 화장품","description":"세안 제품 예시","price":12900,"stock":99,"emoji":"🫧"},{"id":900003,"name":"두피 케어 샴푸 300ml","category":"두피·모발","description":"샴푸 예시","price":16900,"stock":99,"emoji":"🌿"},{"id":900004,"name":"헤어 트리트먼트 200ml","category":"두피·모발","description":"트리트먼트 예시","price":14900,"stock":99,"emoji":"✨"},{"id":900005,"name":"휴대용 손 세정제 100ml","category":"생활용품","description":"손 세정 제품 예시","price":4900,"stock":99,"emoji":"🧼"},{"id":900006,"name":"데일리 핸드크림 50ml","category":"화장품","description":"핸드크림 예시","price":7900,"stock":99,"emoji":"🤲"}]
+DEMO_BY_ID={p["id"]:p for p in DEMO_PRODUCTS}
 DB=os.environ.get("SOMANG_DB_PATH","/tmp/somang_preview.sqlite3")
 def db():
     c=sqlite3.connect(DB,timeout=15);c.row_factory=sqlite3.Row;return c
@@ -21,23 +23,25 @@ def csrf():
 def check():
     if not session.get("csrf") or not hmac.compare_digest(session["csrf"],request.form.get("csrf","")):abort(400)
 def page(title,body):
-    return "<!doctype html><html lang='ko'><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>"+esc(title)+" | 소망약국</title><style>body{font-family:system-ui,sans-serif;margin:0;background:#f5faf6;color:#214435}header{background:white;padding:18px 5%;display:flex;justify-content:space-between;flex-wrap:wrap;gap:12px}a{color:#287054}main{max-width:800px;margin:30px auto;padding:16px}.card{background:white;padding:23px;margin:16px 0;border:1px solid #dbe8df;border-radius:14px}label{display:block;margin:14px 0}input{padding:10px;border:1px solid #cadad0;border-radius:7px;max-width:90%}button,.btn{background:#267257;color:white;border:0;padding:11px 15px;border-radius:8px;cursor:pointer;display:inline-block;text-decoration:none}small{color:#68776e}.warning{background:#fff1d9;padding:15px;border-radius:10px}form{margin:10px 0}</style><header><strong><a href='/'>✚ 소망약국</a></strong><nav><a href='/shop'>상품</a>　<a href='/cart'>장바구니</a>　<a href='/account'>회원</a></nav></header><main><h1>"+esc(title)+"</h1>"+body+"</main>"
+    return "<!doctype html><html lang='ko'><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>"+esc(title)+" | 소망약국</title><style>body{font-family:system-ui,sans-serif;margin:0;background:#f5faf6;color:#214435}header{background:white;padding:18px 5%;display:flex;justify-content:space-between;flex-wrap:wrap;gap:12px}a{color:#287054}main{max-width:800px;margin:30px auto;padding:16px}.card{background:white;padding:23px;margin:16px 0;border:1px solid #dbe8df;border-radius:14px}label{display:block;margin:14px 0}input{padding:10px;border:1px solid #cadad0;border-radius:7px;max-width:90%}button,.btn{background:#267257;color:white;border:0;padding:11px 15px;border-radius:8px;cursor:pointer;display:inline-block;text-decoration:none}small{color:#68776e}.warning{background:#fff1d9;padding:15px;border-radius:10px}form{margin:10px 0}.demo-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.product-card{padding:0;overflow:hidden;margin:0}.product-art{height:110px;background:#e9f3eb;display:grid;place-items:center;font-size:48px}.product-info{padding:15px}.product-info h2{font-size:18px}.product-info p{font-size:13px}.product-info input{width:70px}.product-info button{width:100%}@media(max-width:520px){main{margin:8px auto;padding:12px}.demo-grid{gap:8px}.product-art{height:85px;font-size:39px}.product-info{padding:10px}.product-info h2{font-size:15px}.product-info p{font-size:12px}}</style><header><strong><a href='/'>✚ 소망약국</a></strong><nav><a href='/shop'>상품</a>　<a href='/cart'>장바구니</a>　<a href='/account'>회원</a></nav></header><main><h1>"+esc(title)+"</h1>"+body+"</main>"
 def product_rows():
     with db() as c:return [dict(r) for r in c.execute("SELECT id,name,category,description,price,stock FROM products WHERE approved=1 AND visible=1 AND stock>0 ORDER BY id DESC LIMIT 100")]
 @shop.get("/shop")
 def catalog():
-    body="<p>상품 등록 및 판매 승인 후 목록에 표시됩니다.</p>"
-    for p in product_rows():
-        body+="<div class='card'><h2>"+esc(p["name"])+"</h2><p>"+esc(p["category"])+" · "+esc(p["description"])+"</p><strong>"+f'{p["price"]:,}'+"원</strong><p>재고 "+str(p["stock"])+"개</p><form action='/cart/add' method='post'><input type='hidden' name='csrf' value='"+csrf()+"'><input type='hidden' name='product_id' value='"+str(p["id"])+"'><label>수량 <input type='number' name='quantity' min='1' max='20' value='1'></label><button>장바구니 담기</button></form></div>"
-    if not product_rows():body+="<div class='card'>현재 승인된 판매 상품이 없습니다.</div>"
-    return page("상품 목록",body)
+    body="<div class='warning'>체험용 가상 상품입니다. 가격은 예시이며 실제 주문·결제는 불가능합니다.</div><div class='demo-grid'>"
+    for p in DEMO_PRODUCTS+product_rows():
+        body+="<article class='card product-card'><div class='product-art'>"+p.get("emoji","🛍️")+"</div><div class='product-info'><small>"+esc(p["category"])+" · "+("체험 상품" if p["id"] in DEMO_BY_ID else "등록 상품")+"</small><h2>"+esc(p["name"])+"</h2><p>"+esc(p["description"])+"</p><strong>"+f'{p["price"]:,}'+"원</strong><form action='/cart/add' method='post'><input type='hidden' name='csrf' value='"+csrf()+"'><input type='hidden' name='product_id' value='"+str(p["id"])+"'><label>수량 <input type='number' name='quantity' min='1' max='20' value='1'></label><button>장바구니 담기</button></form></div></article>"
+    body+="</div><p><a class='btn' href='/cart'>장바구니 확인 →</a></p>"
+    return page("상품 둘러보기",body)
 @shop.post("/cart/add")
 def add():
     check()
     try:pid=int(request.form.get("product_id",""));qty=int(request.form.get("quantity","1"))
     except ValueError:abort(400)
     if qty<1 or qty>20:abort(400)
-    with db() as c:p=c.execute("SELECT stock FROM products WHERE id=? AND approved=1 AND visible=1",(pid,)).fetchone()
+    if pid in DEMO_BY_ID:p=DEMO_BY_ID[pid]
+    else:
+        with db() as c:p=c.execute("SELECT stock FROM products WHERE id=? AND approved=1 AND visible=1",(pid,)).fetchone()
     if not p:abort(404)
     cart=dict(session.get("cart",{}))
     cart[str(pid)]=min(20,p["stock"],int(cart.get(str(pid),0))+qty)
@@ -50,17 +54,18 @@ def contents():
         for k,v in list(cart.items())[:50]:
             try:pid=int(k);qty=int(v)
             except (ValueError,TypeError):continue
-            p=c.execute("SELECT id,name,price,stock FROM products WHERE id=? AND approved=1 AND visible=1 AND stock>0",(pid,)).fetchone()
+            if pid in DEMO_BY_ID:p=DEMO_BY_ID[pid]
+            else:p=c.execute("SELECT id,name,price,stock FROM products WHERE id=? AND approved=1 AND visible=1 AND stock>0",(pid,)).fetchone()
             if p and qty>0:
                 qty=min(qty,p["stock"],20);row=dict(p);row["quantity"]=qty;rows.append(row);total+=row["price"]*qty
     return rows,total
 @shop.get("/cart")
 def cart():
     rows,total=contents()
-    body="<div class='card'>"
+    body="<div class='warning'>체험용 장바구니 · 실제 결제 불가</div><p><a href='/shop'>← 상품 더 보기</a></p><div class='card'>"
     for p in rows:
         body+="<p>"+esc(p["name"])+" · "+str(p["quantity"])+"개 · "+f'{p["price"]*p["quantity"]:,}'+"원 <form action='/cart/remove' method='post'><input type='hidden' name='csrf' value='"+csrf()+"'><input type='hidden' name='product_id' value='"+str(p["id"])+"'><button>삭제</button></form></p>"
-    body+="<h2>합계 "+f'{total:,}'+"원</h2>"+("<a class='btn' href='/checkout'>주문 내용 확인</a>" if rows else "<p>장바구니가 비어 있습니다.</p>")+"</div>"
+    body+="<h2>합계 "+f'{total:,}'+"원</h2>"+("<a class='btn' href='/checkout'>결제 전 주문 확인</a>" if rows else "<p>장바구니가 비어 있습니다.</p>")+"</div>"
     return page("장바구니",body)
 @shop.post("/cart/remove")
 def remove():
@@ -112,8 +117,8 @@ def checkout():
     mode="회원" if session.get("member_id") else "비회원"
     body="<div class='warning'>현재는 주문 시뮬레이션 단계입니다. 결제·주문 접수·배송을 진행하지 않습니다. 실제 주소·연락처를 입력하지 마세요.</div><div class='card'><h2>"+mode+" 주문 내용 미리보기</h2>"
     for p in rows:body+="<p>"+esc(p["name"])+" × "+str(p["quantity"])+" = "+f'{p["price"]*p["quantity"]:,}'+"원</p>"
-    body+="<h2>상품 합계 "+f'{total:,}'+"원</h2><p>배송비 및 최종 결제금액은 추후 배송 정책 확정 후 산정됩니다.</p><p>현재 PG 결제 미연결 · 실제 주문 생성 불가</p><a href='/cart'>장바구니로 돌아가기</a></div>"
-    return page("주문서 미리보기",body)
+    body+="<h2>상품 합계 "+f'{total:,}'+"원</h2><p>배송비 및 최종 결제금액은 추후 배송 정책 확정 후 산정됩니다.</p><p>결제 전 상품·수량·금액 확인 완료 · 실제 결제는 비활성화</p><a href='/cart'>장바구니로 돌아가기</a></div>"
+    return page("결제 전 주문 확인",body)
 @shop.get("/payment/status")
 def payment_status():
     return jsonify(provider="not_configured",payments_enabled=False,real_orders_enabled=False,message="PG 계약·키·웹훅 검증 및 영구 저장소 설정 전 결제 차단")
