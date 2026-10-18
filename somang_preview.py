@@ -80,3 +80,7 @@ def hide(pid):
     return redirect("/admin")
 @app.get("/health")
 def health():return jsonify(status="ok",payments_enabled=False,admin_configured=bool(os.environ.get("SOMANG_ADMIN_PASSWORD")))
+
+# Isolated operations blueprint; uses the same admin session and demo database.
+from somang_ops import ops
+app.register_blueprint(ops)
