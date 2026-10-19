@@ -79,6 +79,46 @@ CSS += """<style>
  .somang-health-grid .somang-category p{line-height:1.45}
 }
 </style>"""
+CSS += """<style>
+/* Clear visual hierarchy and four gentle health-guide accents. */
+.somang-home{color:#203f35}
+.somang-home h2{color:#183e30;letter-spacing:-.5px}
+#health h2{border-left:4px solid #287759;padding-left:11px;margin-bottom:14px}
+.somang-health-grid{gap:12px}
+.somang-health-grid .somang-category{
+ --accent:#277759;--tint:#eff8f2;--edge:#cfe4d7;
+ border:1px solid var(--edge);border-top:3px solid var(--accent);
+ background:linear-gradient(150deg,var(--tint),#fff 68%);
+ border-radius:15px;padding:16px;box-shadow:0 3px 10px #203f3505;
+}
+.somang-health-grid .somang-category:nth-child(1){--accent:#226e8b;--tint:#edf8fc;--edge:#cce5ed}
+.somang-health-grid .somang-category:nth-child(2){--accent:#347957;--tint:#eff8ef;--edge:#d1e5d4}
+.somang-health-grid .somang-category:nth-child(3){--accent:#79613c;--tint:#fcf6e9;--edge:#eadfca}
+.somang-health-grid .somang-category:nth-child(4){--accent:#566daa;--tint:#f1f3fc;--edge:#dce2f4}
+.somang-health-grid .emoji{display:flex;align-items:center;justify-content:center;width:38px;height:38px;font-size:25px;background:#ffffffc9;border-radius:11px;margin-bottom:9px;line-height:1}
+.somang-health-grid h3{color:var(--accent);margin:0 0 8px}
+.somang-health-grid .somang-category p{color:#42584e;word-break:normal;overflow-wrap:break-word}
+.somang-hero .tag{color:#276c52;letter-spacing:.15px}
+.somang-hero p{color:#365347}
+.somang-actions a{transition:background .15s,box-shadow .15s}
+.somang-actions a:hover{background:#1d5d45;box-shadow:0 3px 8px #1e5d441a}
+.somang-actions a.secondary:hover{background:#eaf4ee;color:#20543f}
+.somang-home .somang-visit{background:#edf5ef;border-color:#d3e3d8}
+.somang-home .somang-visit summary{color:#214c38}
+.somang-home .somang-visit summary span{color:#4d6c59}
+.somang-home .somang-compact-law{background:#f3f5f3;border-color:#dce4dd;color:#405a4b}
+.somang-home .somang-compact-law strong{color:#355b43}
+.somang-home .somang-compact-law small{color:#526b5b}
+.somang-home .somang-mini-info{color:#52675a}
+.somang-home .somang-legal-note{color:#5b6d60}
+a:focus-visible,summary:focus-visible,button:focus-visible{outline:3px solid #247b9b;outline-offset:3px}
+@media(max-width:700px){
+ .somang-health-grid{gap:10px}
+ .somang-health-grid .somang-category{padding:13px}
+ .somang-home .somang-visit summary{gap:8px;padding:12px}
+ .somang-home .somang-visit summary span{font-size:11px}
+}
+</style>"""
 def page(body,title="소망약국"):
     return render_template_string("<!doctype html><html lang='ko'><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><meta name='theme-color' content='#204338'><meta name='description' content='서울 종로구 창신동 소망약국 방문 안내. 종로 335, 1층. 전화 02-742-0075.'><title>{{title}}</title>"+CSS+"</head><body><header><a class='brand' href='/'>✚ 소망약국</a><nav><a class='nav-online-products' href='/online-products'>온라인 상품</a><a href='/account'>회원 로그인</a><a href='/#info'>약국 안내</a><a href='/admin'>관리자</a></nav></header>"+body+"<footer>소망약국 · 서울특별시 종로구 종로 335, 1층 (원풍빌딩)<br><a href='tel:027420075'>02-742-0075</a><br>온라인 판매 상품은 품목별 적법성 확인 후 제공됩니다.</footer><nav class='somang-mobile-nav' aria-label='모바일 빠른 메뉴'><a href='/'><span class='ico' aria-hidden='true'>⌂</span>홈</a><a href='/online-products'><span class='ico' aria-hidden='true'>▦</span>온라인 상품</a><a href='/cart'><span class='ico' aria-hidden='true'>🛒</span>장바구니</a><a href='/account'><span class='ico' aria-hidden='true'>♙</span>마이페이지</a></nav></body></html>",title=title)
 def csrf():
