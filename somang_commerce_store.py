@@ -34,7 +34,7 @@ def sql(c,query,args=()):
     if c.__class__.__module__.startswith('sqlite3'):
         query=query.replace(' FOR UPDATE','').replace('now()','CURRENT_TIMESTAMP')
     else:query=query.replace('?', '%s')
-    return c.execute(query,args)
+    return c.execute(query,args) if args else c.execute(query)
 
 def initialize():
     from somang_member_store import initialize_schema
@@ -48,6 +48,8 @@ def initialize():
             script=script.replace('BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY','INTEGER PRIMARY KEY').replace('TIMESTAMPTZ','TEXT').replace('now()','CURRENT_TIMESTAMP')
             c.executescript(script)
         else:c.execute(script)
+        from somang_ops_store import initialize as initialize_operations
+        initialize_operations(c)
 
 def settings(c):
     return {r['key']:r['value'] for r in sql(c,'SELECT key,value FROM commerce_settings').fetchall()}
@@ -97,7 +99,7 @@ def create_order(member_id,cart,data,request_key):
     with connect() as c:
         # Serialize submissions per member; duplicate browser submissions return the same order.
         m=sql(c,"SELECT * FROM members WHERE id=? FOR UPDATE",(member_id,)).fetchone()
-        if not m or m['status']!='active' or not m['email_verified_at']:raise BusinessError('회원 로그인을 다시 해주세요.')
+        if not m or m['status'] not in ('active','pending'):raise BusinessError('회원 로그인을 다시 해주세요.')
         existing=sql(c,'SELECT number,member_id FROM commerce_orders WHERE request_key=?',(request_key,)).fetchone()
         if existing:
             if existing['member_id']!=member_id:raise BusinessError('잘못된 주문 요청입니다.')

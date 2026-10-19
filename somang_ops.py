@@ -3,6 +3,10 @@ import os, sqlite3, hmac, secrets, html
 from flask import Blueprint, request, session, redirect, abort
 ops=Blueprint("somang_ops",__name__,url_prefix="/admin/ops")
 def conn():
+    from somang_commerce_store import enabled
+    if enabled():
+        from somang_ops_store import Connection
+        return Connection()
     c=sqlite3.connect(os.environ.get("SOMANG_DB_PATH","/tmp/somang_preview.sqlite3"),timeout=15)
     c.row_factory=sqlite3.Row
     return c
@@ -18,13 +22,19 @@ def init():
         CREATE TABLE IF NOT EXISTS inventory_disposals(id INTEGER PRIMARY KEY,lot_id INTEGER NOT NULL,product_id INTEGER NOT NULL,quantity INTEGER NOT NULL,reason TEXT NOT NULL,created_at TEXT DEFAULT CURRENT_TIMESTAMP);
         CREATE TABLE IF NOT EXISTS ops_audit(id INTEGER PRIMARY KEY,action TEXT NOT NULL,details TEXT NOT NULL,created_at TEXT DEFAULT CURRENT_TIMESTAMP);
         """)
-init()
+if os.environ.get("SOMANG_COMMERCE_ENABLED")!="1":init()
 def guard(post=False):
     if not os.environ.get("SOMANG_ADMIN_PASSWORD") or not os.environ.get("SOMANG_SECRET_KEY") or not session.get("admin"):abort(403)
     if post and (not session.get("csrf") or not hmac.compare_digest(session["csrf"],request.form.get("csrf",""))):abort(400)
 def esc(x):return html.escape(str(x),quote=True)
 def csrf():return esc(session.get("csrf",""))
 def layout(title,body):
+    if os.environ.get("SOMANG_COMMERCE_ENABLED")=="1":
+        from somang_commerce import screen,admin_nav
+        nav="<nav class='commerce-nav'>"+"".join("<a href='"+url+"'>"+label+"</a>" for url,label in [("/admin/ops","운영 현황"),("/admin/ops/suppliers","공급사·발주"),("/admin/ops/customers","고객 메모"),("/admin/ops/ledger","수동 장부"),("/admin/ops/stock","재고 이력"),("/admin/ops/lots","로트·유통기한"),("/admin/reports/summary","보고서")])+"</nav>"
+        body=body.replace("(테스트용)","").replace("(개발용)","").replace("(테스트)","").replace("위 수치는 개발용 데이터에 한정됩니다.","실제 판매 상품과 영구 저장된 운영 기록 기준입니다.")
+        return screen(title,admin_nav()+nav+body)
+
     return """<!doctype html><html lang="ko"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>소망약국 운영관리</title><style>body{font-family:system-ui,sans-serif;background:#f5faf6;color:#244638;margin:0}header{background:#1d5945;color:white;padding:18px 5%}main{max-width:1100px;margin:auto;padding:25px 16px}a{color:#216f55}header a{color:white}nav{display:flex;gap:15px;flex-wrap:wrap;margin:18px 0}.box{background:white;border:1px solid #dce9e0;border-radius:13px;padding:20px;margin:14px 0}input,select{padding:10px;margin:5px;max-width:95%;border:1px solid #ccc;border-radius:7px}button{padding:10px 15px;background:#267456;color:white;border:0;border-radius:7px}table{border-collapse:collapse;width:100%}td,th{padding:9px;text-align:left;border-bottom:1px solid #eee}small{color:#667}form{display:flex;flex-wrap:wrap;gap:7px;align-items:center} .scroll{overflow-x:auto}</style><header><b>✚ 소망약국 · 통합 운영관리</b>　<a href="/">홈페이지</a>　<a href="/admin">상품 관리</a></header><main><nav><a href="/admin/ops">대시보드</a><a href="/admin/ops/suppliers">공급사·발주</a><a href="/admin/ops/customers">고객 관리</a><a href="/admin/ops/ledger">매출·매입 장부</a><a href="/admin/ops/stock">재고</a><a href="/admin/ops/lots">로트·유통기한</a><a href="/admin/members">회원 관리</a><a href="/admin/returns">반품·환불</a><a href="/admin/reports/summary">보고서</a></nav><h1>"""+esc(title)+"</h1><p><small>개발용 운영 화면 · 현재 무료 서버의 데이터는 영구 보관되지 않습니다. 실제 고객 개인정보 및 실거래를 입력하지 마세요.</small></p>"+body+"</main></html>"
 def form(action,fields,button):
     return "<form method='post' action='"+action+"'><input type='hidden' name='csrf' value='"+csrf()+"'>"+fields+"<button>"+button+"</button></form>"
@@ -69,7 +79,7 @@ def purchase():
     try:sid=int(request.form.get("supplier_id",""));amount=int(request.form.get("total",""))
     except ValueError:abort(400)
     ref=request.form.get("reference","").strip()[:100]
-    if not ref or amount<0:abort(400)
+    if not ref or not 0<=amount<=1000000000000:abort(400)
     with conn() as c:
         if not c.execute("SELECT 1 FROM suppliers WHERE id=?",(sid,)).fetchone():abort(400)
         c.execute("INSERT INTO purchase_orders(supplier_id,reference,total) VALUES(?,?,?)",(sid,ref,amount))
@@ -96,7 +106,7 @@ def ledger():
         try:amount=int(request.form.get("amount",""))
         except ValueError:abort(400)
         description=request.form.get("description","").strip()[:200]
-        if amount<0 or not description:abort(400)
+        if not 0<=amount<=1000000000000 or not description:abort(400)
         with conn() as c:
             c.execute("INSERT INTO ledger(kind,amount,description,reference) VALUES(?,?,?,?)",(kind,amount,description,request.form.get("reference","")[:80]))
             audit(c,"ledger.entry",kind)

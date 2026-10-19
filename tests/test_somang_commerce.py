@@ -125,14 +125,14 @@ class CommerceTests(unittest.TestCase):
         with patch.object(pay,'provider',return_value=self.payment(n)):
             r=self.client.post('/payments/webhook',json={'data':{'orderId':n,'paymentKey':'pg-'+n,'status':'CANCELED'}})
         self.assertEqual(r.status_code,200);self.assertEqual(self.state(n),'paid')
-    def test_real_login_pending_account_cannot_order(self):
+    def test_existing_pending_member_can_use_account_and_orders(self):
         self.assertEqual(self.client.post('/login',data={'csrf':'token','email':'one@example.com','password':'wrong'}).status_code,403)
         self.assertEqual(self.client.post('/login',data={'csrf':'token','email':'one@example.com','password':'password12345'}).status_code,302)
         with db.connect() as c:db.sql(c,"UPDATE members SET status='pending',email_verified_at=NULL WHERE id=1")
         with self.client.session_transaction() as s:s['csrf']='token'
         self.assertEqual(self.client.post('/login',data={'csrf':'token','email':'one@example.com','password':'password12345'}).status_code,302)
-        self.assertEqual(self.client.get('/orders').status_code,401)
-        self.assertIn('회원가입이 완료되었습니다.',self.client.get('/account').get_data(as_text=True))
+        self.assertEqual(self.client.get('/orders').status_code,200)
+        self.assertNotIn('인증 후',self.client.get('/account').get_data(as_text=True))
     def test_signup_without_mail_or_sales_policy(self):
         guest=app.test_client()
         with guest.session_transaction() as s:s['csrf']='token'
@@ -144,13 +144,15 @@ class CommerceTests(unittest.TestCase):
             mail.assert_not_called()
             with db.connect() as c:
                 r=db.sql(c,"SELECT * FROM members WHERE email='new@example.com'").fetchone()
-                self.assertEqual(r['status'],'pending');self.assertIsNone(r['email_verified_at'])
+                self.assertEqual(r['status'],'active');self.assertIsNone(r['email_verified_at'])
                 self.assertNotEqual(r['password_hash'],data['password'])
                 self.assertEqual(db.sql(c,'SELECT count(*) n FROM commerce_consents WHERE member_id=?',(r['id'],)).fetchone()['n'],1)
             self.assertEqual(guest.post('/login',data=data).status_code,302)
-            self.assertIn('회원가입이 완료되었습니다.',guest.get('/account').get_data(as_text=True))
-            self.assertEqual(guest.get('/orders').status_code,401)
-            with self.assertRaises(db.BusinessError):db.create_order(r['id'],{'1':1},self.data(),self.data()['request_key'])
+            self.assertIn('소망약국 회원입니다.',guest.get('/account').get_data(as_text=True))
+            self.assertEqual(guest.get('/orders').status_code,200)
+            # Policy and payment readiness remain separate from membership.
+            with db.connect() as c:db.save_setting(c,'policies_ready','1')
+            n=db.create_order(r['id'],{'1':1},self.data(),self.data()['request_key']);pay.cancel(n,'member',r['id'])
             with guest.session_transaction() as s:token=s['csrf']
             self.assertEqual(guest.post('/members/delete',data={'csrf':token,'password':data['password']}).status_code,200)
     def test_signup_confirmation_and_duplicate_preserve_password(self):
@@ -166,14 +168,14 @@ class CommerceTests(unittest.TestCase):
         with patch('somang_member_mail.send_account_email',side_effect=RuntimeError('offline')):
             self.assertEqual(self.client.post('/register',data=data).status_code,200)
         self.assertEqual(self.client.post('/login',data=data).status_code,302)
-        self.assertEqual(self.client.get('/orders').status_code,401)
-    def test_registration_verify_and_one_time_token(self):
-        with patch('somang_member_mail.send_account_email') as mail:
-            r=self.client.post('/register',data={'csrf':'token','email':'new@example.com','password':'newpassword1234','password_confirm':'newpassword1234','consent':'yes'})
-            self.assertEqual(r.status_code,200)
-            raw=mail.call_args.args[1]
-        with db.connect() as c:r=db.sql(c,"SELECT * FROM members WHERE email='new@example.com'").fetchone();self.assertEqual(r['status'],'pending')
-        r=self.client.post('/members/verify',data={'csrf':'token','token':raw});self.assertEqual(r.status_code,200)
+        self.assertEqual(self.client.get('/orders').status_code,200)
+    def test_legacy_verification_link_is_optional_and_one_time(self):
+        from somang_commerce import issue_token
+        with db.connect() as c:
+            db.sql(c,"UPDATE members SET email_verified_at=NULL,status='pending' WHERE id=1")
+            raw=issue_token(c,1,'verify')
+        self.assertEqual(self.client.get('/orders').status_code,200)
+        self.assertEqual(self.client.post('/members/verify',data={'csrf':'token','token':raw}).status_code,200)
         self.assertEqual(self.client.post('/members/verify',data={'csrf':'token','token':raw}).status_code,409)
     def test_checkout_and_browser_order_flow(self):
         self.client.post('/cart/add',data={'csrf':'token','product_id':1,'quantity':1})
@@ -239,3 +241,76 @@ class CommerceTests(unittest.TestCase):
         with self.client.session_transaction() as s:s['admin']=True
         with db.connect() as c:db.sql(c,"UPDATE commerce_orders SET mode='live' WHERE number=?",(n,))
         self.assertEqual(self.client.post('/admin/sales/orders/'+n+'/shipping',data={'csrf':'token','state':'shipped','courier':'택배','tracking':'12345678'}).status_code,409)
+
+class AdminOperationsTests(unittest.TestCase):
+    login_as=CommerceTests.login_as
+    data=CommerceTests.data
+    stock=CommerceTests.stock
+    tearDown=CommerceTests.tearDown
+    def setUp(self):
+        CommerceTests.setUp(self)
+        with self.client.session_transaction() as s:s['admin']=True
+    def test_all_operation_pages_and_exports(self):
+        for path in ('/admin/ops','/admin/ops/suppliers','/admin/ops/customers','/admin/ops/ledger','/admin/ops/stock','/admin/ops/lots','/admin/reports/summary','/admin/reports/products.csv','/admin/reports/orders.csv','/admin/reports/suppliers.csv','/admin/reports/ledger.csv','/admin/reports/purchase-orders.csv'):
+            r=self.client.get(path);self.assertEqual(r.status_code,200,path)
+        self.assertIn('text/html',self.client.get('/admin/reports/summary').content_type)
+        self.assertEqual(self.client.get('/admin/reports/summary?format=json').json['scope'],'persistent_manual_entries')
+        guest=app.test_client()
+        for path in ('/admin/ops','/admin/reports/orders.csv','/admin/reports/products.csv'):
+            self.assertEqual(guest.get(path).status_code,403,path)
+    def test_supplier_purchase_receipt_and_no_double_stock(self):
+        post=lambda path,**data:self.client.post(path,data={'csrf':'token',**data})
+        self.assertEqual(post('/admin/ops/suppliers',name='供給 테스트',contact='테스트',note='메모').status_code,302)
+        self.assertEqual(post('/admin/ops/purchase',supplier_id=1,reference='PO-TEST',total=10000).status_code,302)
+        self.assertEqual(post('/admin/ops/purchase/receive',order_id=1,product_id=1,quantity=2).status_code,302)
+        self.assertEqual(self.stock(),5)
+        self.assertEqual(post('/admin/ops/purchase/receive',order_id=1,product_id=1,quantity=2).status_code,409)
+        self.assertEqual(self.stock(),5)
+        self.assertEqual(self.client.get('/admin/reports/summary?format=json').json['expense'],10000)
+    def test_stock_lots_and_atomic_writeoff(self):
+        post=lambda path,**data:self.client.post(path,data={'csrf':'token',**data})
+        self.assertEqual(post('/admin/ops/stock/adjust',product_id=1,change_qty=-20,reason='불가').status_code,400)
+        self.assertEqual(self.stock(),3)
+        self.assertEqual(post('/admin/ops/lots/receive',product_id=1,quantity=3,lot_code='LOT-T',expiry_date='2099-01-01').status_code,302)
+        self.assertEqual(self.stock(),6)
+        self.assertEqual(post('/admin/ops/lots/dispatch',lot_id=1,quantity=1).status_code,302)
+        self.assertEqual(post('/admin/ops/lots/dispose',lot_id=1,quantity=1,reason='파손').status_code,302)
+        self.assertEqual(self.stock(),4)
+        self.assertEqual(post('/admin/ops/lots/dispose',lot_id=1,quantity=9,reason='초과').status_code,409)
+        self.assertEqual(self.stock(),4)
+    def test_settings_product_edits_and_member_controls(self):
+        post=lambda path,**data:self.client.post(path,data={'csrf':'token',**data})
+        self.assertEqual(post('/admin/sales/settings',shipping_fee=2500,free_shipping_over=40000,seller_details='테스트 판매자 사업자 정보',shipping_policy='테스트 배송 반품 정책을 충분한 길이로 입력합니다.',privacy_contact='테스트 연락처',policies_ready='1').status_code,302)
+        self.assertEqual(post('/admin/sales/products/1',name='수정된 상품',category='생활용품',price=15000,stock_delta=2,description='설명',compliance_checked=1,published=1).status_code,302)
+        self.assertEqual(self.stock(),5);self.assertIn('수정된 상품',self.client.get('/shop').get_data(as_text=True))
+        with db.connect() as c:db.sql(c,"UPDATE members SET status='pending',email_verified_at=NULL WHERE id=2")
+        self.assertEqual(post('/admin/members/2/suspend').status_code,302)
+        self.assertEqual(post('/admin/members/2/restore').status_code,302)
+        self.assertIsNone(db.member(2)['email_verified_at'])
+    def test_csv_formula_escape_and_cross_session_storage(self):
+        self.client.post('/admin/ops/suppliers',data={'csrf':'token','name':'=1+1'})
+        other=app.test_client()
+        with other.session_transaction() as s:s['admin']=True
+        r=other.get('/admin/reports/suppliers.csv')
+        self.assertIn("'=1+1",r.get_data(as_text=True))
+        self.assertIn('=1+1',other.get('/admin/ops/suppliers').get_data(as_text=True))
+    def test_all_mutations_require_csrf(self):
+        for path in ('/admin/ops/suppliers','/admin/ops/purchase','/admin/ops/stock/adjust','/admin/ops/lots/receive','/admin/ops/lots/dispatch','/admin/ops/lots/dispose','/admin/ops/ledger','/admin/ops/customers','/admin/sales/products','/admin/sales/settings','/admin/members/2/suspend'):
+            self.assertEqual(self.client.post(path,data={'csrf':'wrong'}).status_code,400,path)
+
+    def test_manual_ledger_and_customer_note(self):
+        self.assertEqual(self.client.post('/admin/ops/ledger',data={'csrf':'token','kind':'income','amount':12000,'description':'수동 매출','reference':'MANUAL-1'}).status_code,302)
+        self.assertEqual(self.client.get('/admin/reports/summary?format=json').json['income'],12000)
+        self.assertEqual(self.client.post('/admin/ops/customers',data={'csrf':'token','alias':'테스트 가명','note':'상담 메모'}).status_code,302)
+        self.assertIn('상담 메모',self.client.get('/admin/ops/customers').get_data(as_text=True))
+    def test_admin_shipping_success_in_sequence(self):
+        n=CommerceTests.order(self)
+        p=CommerceTests.payment(self,n)
+        with patch.object(pay,'provider',return_value=p):pay.confirm(n,1,p['paymentKey'],13000)
+        with db.connect() as c:db.sql(c,"UPDATE commerce_orders SET mode='live' WHERE number=?",(n,))
+        path='/admin/sales/orders/'+n+'/shipping'
+        self.assertEqual(self.client.post(path,data={'csrf':'token','state':'preparing'}).status_code,302)
+        self.assertEqual(self.client.post(path,data={'csrf':'token','state':'shipped'}).status_code,409)
+        self.assertEqual(self.client.post(path,data={'csrf':'token','state':'shipped','courier':'테스트 택배','tracking':'12345678'}).status_code,302)
+        self.assertEqual(self.client.post(path,data={'csrf':'token','state':'delivered'}).status_code,302)
+        self.assertEqual(db.order(n)[0]['state'],'delivered')

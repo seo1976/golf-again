@@ -24,11 +24,11 @@ def screen(title,body):
 def message(text,title='안내',code=200):
     return screen(title,"<div class='card'>"+esc(text)+"<p><a href='/account'>내 계정</a> · <a href='/shop'>상품 보기</a></p></div>"),code
 
-def current_member(required=True, verified=True):
+def current_member(required=True):
     mid=session.get('somang_auth_member_id')
     m=store.member(mid) if session.get('somang_auth_kind')=='persistent_member' and isinstance(mid,int) and not isinstance(mid,bool) else None
-    if not m or m['status'] not in ('active','pending') or (verified and (m['status']!='active' or not m['email_verified_at'])) or session.get('somang_auth_version')!=m['auth_version']:
-        if required:abort(401,'이메일 인증 후 주문 기능을 이용할 수 있습니다. 내 계정에서 인증 상태를 확인해 주세요.' if m and m['status']=='pending' and session.get('somang_auth_version')==m['auth_version'] else '회원 로그인이 필요합니다.')
+    if not m or m['status'] not in ('active','pending') or session.get('somang_auth_version')!=m['auth_version']:
+        if required:abort(401,'회원 로그인이 필요합니다.')
         return None
     return m
 
@@ -37,7 +37,7 @@ def staff():
     admin()
 
 def admin_nav():
-    return "<nav class='commerce-nav'><a href='/admin/sales'>판매 대시보드</a><a href='/admin/sales/products'>상품·재고</a><a href='/admin/sales/orders'>주문·결제·배송</a><a href='/admin/members'>회원</a><a href='/admin/returns'>취소·반품</a><a href='/admin/sales/settings'>판매 설정</a><a href='/admin/ops'>기존 운영 메뉴</a></nav>"+form('/admin/sales/logout','','관리자 로그아웃')
+    return "<nav class='commerce-nav'><a href='/admin/sales'>판매 대시보드</a><a href='/admin/sales/products'>상품·재고</a><a href='/admin/sales/orders'>주문·결제·배송</a><a href='/admin/members'>회원</a><a href='/admin/returns'>취소·반품</a><a href='/admin/sales/settings'>판매 설정</a><a href='/admin/ops'>운영·장부·보고서</a></nav>"+form('/admin/sales/logout','','관리자 로그아웃')
 
 def origin():
     value=os.environ.get('SOMANG_PUBLIC_ORIGIN','https://somang-pharmacy-preview.onrender.com').rstrip('/')
@@ -61,46 +61,34 @@ def issue_token(c,mid,purpose):
     return raw
 
 def account():
-    from somang_member_mail import mail_ready
-    m=current_member(False, verified=False)
+    m=current_member(False)
     if m:
         body="<div class='card'><h2>"+esc(m['email'])+"</h2><p>소망약국 회원입니다.</p><div class='account-shortcuts'><a class='btn' href='/shop'>상품 보기</a><a class='btn' href='/cart'>장바구니</a></div>"
-        if m['email_verified_at']:body+="<p><a class='btn' href='/orders'>주문·배송 내역</a></p>"
-        if not m['email_verified_at']:
-            body+="<div class='commerce-help'><strong>회원가입이 완료되었습니다.</strong><p>이메일 인증 후 주문 기능을 이용할 수 있습니다.</p>"
-            if mail_ready():body+=form('/members/resend',"<input type='hidden' name='email' value='"+esc(m['email'])+"'>",'인증메일 받기')
-            else:body+="<p>인증메일 연결을 준비하고 있습니다. 가입 정보는 안전하게 저장되었습니다.</p>"
-            body+="</div>"
+        body+="<p><a class='btn' href='/orders'>주문·배송 내역</a></p>"
         body+=form('/logout','','로그아웃')+"<details><summary>회원 탈퇴</summary><p>진행 중인 주문은 처리 후 탈퇴할 수 있습니다. 주문·결제 기록은 거래 보존 정책에 따라 별도 보관됩니다.</p>"+form('/members/delete',field('password','현재 비밀번호','password',extra="maxlength='200' autocomplete='current-password'"),'비밀번호 확인 후 탈퇴')+"</details></div>"
     else:
         body="<div class='card'><h2>회원 로그인</h2>"+form('/login',field('email','이메일','email',extra="maxlength='254' autocomplete='email'")+field('password','비밀번호','password',extra="maxlength='200' autocomplete='current-password'"),'로그인')+"<a href='/members/reset'>비밀번호 재설정</a></div>"
         if registration_ready():
-            body+="<div class='card'><h2>회원가입</h2><p>이메일과 비밀번호로 가입할 수 있어요. 주문 기능은 이메일 인증 후 이용할 수 있습니다.</p>"+form('/register',field('email','이메일','email',extra="maxlength='254' autocomplete='email'")+field('password','비밀번호 (12~200자)','password',extra="minlength='12' maxlength='200' autocomplete='new-password'")+field('password_confirm','비밀번호 확인','password',extra="minlength='12' maxlength='200' autocomplete='new-password'")+"<label><input type='checkbox' name='consent' value='yes' required> <a href='/members/privacy'>개인정보 수집·이용</a> 및 <a href='/members/terms'>이용약관</a> 동의 (필수)</label>",'회원가입')+"</div>"
+            body+="<div class='card'><h2>회원가입</h2><p>이메일과 비밀번호로 가입하면 바로 이용할 수 있어요.</p>"+form('/register',field('email','이메일','email',extra="maxlength='254' autocomplete='email'")+field('password','비밀번호 (12~200자)','password',extra="minlength='12' maxlength='200' autocomplete='new-password'")+field('password_confirm','비밀번호 확인','password',extra="minlength='12' maxlength='200' autocomplete='new-password'")+"<label><input type='checkbox' name='consent' value='yes' required> <a href='/members/privacy'>개인정보 수집·이용</a> 및 <a href='/members/terms'>이용약관</a> 동의 (필수)</label>",'회원가입')+"</div>"
         else:body+="<div class='commerce-help'>회원 서비스 연결을 확인 중입니다. 잠시 후 다시 이용해 주세요.</div>"
-        if mail_ready():body+="<details class='card'><summary>인증메일 다시 받기</summary>"+form('/members/resend',field('email','이메일','email'),'인증메일 재발송')+"</details>"
+
     return screen('소망약국 회원',body)
 
 def register():
     check()
     if not registration_ready():return message('회원 서비스 연결을 확인 중입니다. 잠시 후 다시 이용해 주세요.',code=503)
     from somang_member_store import normalize_email
-    from somang_member_mail import send_account_email, mail_ready
     try:email=normalize_email(request.form.get('email',''))
     except ValueError:raise store.BusinessError('이메일을 확인해 주세요.')
     pw=request.form.get('password','')
     if not 12<=len(pw)<=200 or request.form.get('consent')!='yes':raise store.BusinessError('12자 이상 비밀번호와 필수 동의를 확인해 주세요.')
     if pw!=request.form.get('password_confirm',''):raise store.BusinessError('비밀번호 확인이 일치하지 않습니다.')
     throttle('register',email,3)
-    raw=None
     with store.connect() as c:
-        r=store.sql(c,'INSERT INTO members(email,password_hash) VALUES(?,?) ON CONFLICT(email) DO NOTHING RETURNING id',(email,generate_password_hash(pw))).fetchone()
+        r=store.sql(c,"INSERT INTO members(email,password_hash,status) VALUES(?,?,'active') ON CONFLICT(email) DO NOTHING RETURNING id",(email,generate_password_hash(pw))).fetchone()
         if r:
             store.sql(c,'INSERT INTO commerce_consents(member_id,version) VALUES(?,?)',(r['id'],'member-v1'))
-            raw=issue_token(c,r['id'],'verify');store.audit(c,r['id'],'member.registered')
-    if raw and mail_ready():
-        try:send_account_email(email,raw,'verify')
-        except Exception:
-            current_app.logger.warning('Account created; verification delivery unavailable')
+            store.audit(c,r['id'],'member.registered')
     return message('가입 신청을 처리했습니다. 입력한 이메일과 비밀번호로 로그인해 주세요. 이미 가입한 이메일은 기존 비밀번호를 이용해 주세요.')
 
 DUMMY_HASH=generate_password_hash('not-a-real-user-'+secrets.token_hex(20))
@@ -133,9 +121,9 @@ def token_flow(purpose):
         r=store.sql(c,'SELECT * FROM commerce_tokens WHERE digest=? AND purpose=? FOR UPDATE',(hashlib.sha256(token.encode()).hexdigest(),purpose)).fetchone()
         if not r or r['consumed'] or r['expires_at']<time.time():raise store.BusinessError('만료되었거나 이미 사용한 인증 주소입니다. 다시 메일을 요청해 주세요.')
         if purpose=='verify':
-            store.sql(c,"UPDATE members SET status='active',email_verified_at=now(),updated_at=now() WHERE id=? AND status='pending'",(r['member_id'],))
+            store.sql(c,"UPDATE members SET status='active',email_verified_at=now(),updated_at=now() WHERE id=? AND status IN ('pending','active')",(r['member_id'],))
         else:
-            changed=store.sql(c,"UPDATE members SET password_hash=?,auth_version=auth_version+1,updated_at=now() WHERE id=? AND status='active' AND email_verified_at IS NOT NULL",(generate_password_hash(pw),r['member_id'])).rowcount
+            changed=store.sql(c,"UPDATE members SET password_hash=?,email_verified_at=now(),status='active',auth_version=auth_version+1,updated_at=now() WHERE id=? AND status IN ('active','pending')",(generate_password_hash(pw),r['member_id'])).rowcount
             if not changed:raise store.BusinessError('계정 상태를 확인해 주세요.')
         store.sql(c,'UPDATE commerce_tokens SET consumed=1 WHERE member_id=? AND purpose=?',(r['member_id'],purpose))
         store.audit(c,r['member_id'],'member.'+purpose)
@@ -151,7 +139,7 @@ def send_token_again():
     purpose='verify' if request.path.endswith('resend') else 'reset';raw=None
     with store.connect() as c:
         r=store.sql(c,'SELECT id,status FROM members WHERE email=?',(email,)).fetchone()
-        if r and r['status']==('pending' if purpose=='verify' else 'active'):raw=issue_token(c,r['id'],purpose)
+        if r and r['status'] in ('pending','active'):raw=issue_token(c,r['id'],purpose)
     if raw:
         from somang_member_mail import send_account_email
         try:send_account_email(email,raw,purpose)
@@ -160,7 +148,7 @@ def send_token_again():
 
 @commerce.post('/members/delete')
 def delete_member():
-    check();m=current_member(verified=False);throttle('delete',m['email'],5)
+    check();m=current_member();throttle('delete',m['email'],5)
     with store.connect() as c:
         r=store.sql(c,'SELECT * FROM members WHERE id=? FOR UPDATE',(m['id'],)).fetchone()
         if not check_password_hash(r['password_hash'],request.form.get('password','')[:200]):raise store.BusinessError('비밀번호를 확인해 주세요.')
@@ -174,7 +162,7 @@ def delete_member():
 def policies():
     with store.connect() as c:cfg=store.settings(c)
     if request.path.endswith('privacy'):
-        body="<h2>회원·주문 정보 수집 및 이용</h2><p>회원 식별과 이메일 인증: 이메일, 암호화된 비밀번호. 주문·배송 및 고객 상담: 수령인, 연락처, 우편번호, 주소, 주문·결제 내역.</p><p>회원 정보는 탈퇴 시 계정 식별정보를 삭제하며, 거래 기록은 관계 법령과 확정된 보유정책에 따라 별도 보관합니다. 필수 정보 수집에 동의하지 않으면 회원가입·주문을 이용할 수 없습니다.</p><p>수탁 처리: Render(호스팅·데이터 저장), Resend(인증메일), 토스페이먼츠(결제). 카드번호는 소망약국 서버에 저장하지 않습니다.</p>"
+        body="<h2>회원·주문 정보 수집 및 이용</h2><p>회원 식별·로그인: 이메일, 해시 처리한 비밀번호. 회원가입 시 이메일 인증은 요구하지 않습니다. 주문·배송 및 고객 상담: 수령인, 연락처, 우편번호, 주소, 주문·결제 내역.</p><p>회원 정보는 탈퇴 시 계정 식별정보를 삭제하며, 거래 기록은 관계 법령과 확정된 보유정책에 따라 별도 보관합니다. 필수 정보 수집에 동의하지 않으면 회원가입·주문을 이용할 수 없습니다.</p><p>수탁 처리: Render(호스팅·데이터 저장), Resend(인증메일), 토스페이먼츠(결제). 카드번호는 소망약국 서버에 저장하지 않습니다.</p>"
     else:body="<h2>소망약국 온라인 이용약관</h2><p>실제 판매 등록 및 확인을 마친 비의약품만 주문할 수 있습니다. 결제사 승인 이후 주문이 확정되며, 주문·결제·배송 내역은 내 계정에서 확인할 수 있습니다.</p><p>결제 전 주문은 직접 취소할 수 있습니다. 결제 후 취소·교환·반품은 고객센터로 요청해 주세요. 배송 이후에는 반품 확인 후 환불합니다.</p>"
     body+="<h2>판매자·고객센터</h2><p>소망약국 · 종로 335, 1층 · 02-742-0075</p><p>"+esc(cfg.get('seller_details','판매자 세부 정보 설정 전입니다.'))+"</p><h2>배송·반품 안내</h2><p>"+esc(cfg.get('shipping_policy','배송·반품 정책 설정 전입니다.'))+"</p><p>개인정보 문의: "+esc(cfg.get('privacy_contact','02-742-0075'))+"</p>"
     return screen('개인정보 안내' if request.path.endswith('privacy') else '이용약관',"<div class='card'>"+body+"</div>")
@@ -387,11 +375,11 @@ def admin_settings():
     with store.connect() as c:cfg=store.settings(c)
     from somang_member_mail import mail_ready
     state=pay.readiness()
-    body=admin_nav()+"<div class='card'><h2>연결 상태</h2><p>영구 DB: 연결됨</p><p>인증메일: "+('설정됨' if mail_ready() else '설정 필요')+"</p><p>결제 모드: "+esc(state['mode'])+" · 전용 키: "+('설정됨' if state['keys_configured'] else '설정 필요')+"</p><p>주문·결제: "+('활성' if state['checkout_enabled'] else '설정 대기')+"</p><p>웹훅 주소: "+esc(origin()+'/payments/webhook')+"</p><small>비밀키는 이 화면에서 받거나 표시하지 않습니다. Render의 소망약국 전용 환경변수에만 설정합니다.</small></div>"
+    body=admin_nav()+"<div class='card'><h2>연결 상태</h2><p>영구 DB: 연결됨</p><p>비밀번호 찾기 메일: "+('설정됨' if mail_ready() else '설정 필요')+"</p><p>결제 모드: "+esc(state['mode'])+" · 전용 키: "+('설정됨' if state['keys_configured'] else '설정 필요')+"</p><p>주문·결제: "+('활성' if state['checkout_enabled'] else '설정 대기')+"</p><p>웹훅 주소: "+esc(origin()+'/payments/webhook')+"</p><small>비밀키는 이 화면에서 받거나 표시하지 않습니다. Render의 소망약국 전용 환경변수에만 설정합니다.</small></div>"
     fields=field('shipping_fee','기본 배송비 (원)','number',cfg.get('shipping_fee',''),extra="min='0' max='100000'")+field('free_shipping_over','무료배송 기준 (원, 0이면 무료배송 기준 없음)','number',cfg.get('free_shipping_over','0'),extra="min='0' max='10000000'")
     for key,label in [('seller_details','판매자 사업자 정보 (상호·대표자·사업자등록/통신판매 정보 등)'),('shipping_policy','배송 지역·배송 기간·추가 운임·반품 주소·반품비·환불 절차'),('privacy_contact','개인정보 담당자·문의처')]:fields+="<label>"+label+"<textarea name='"+key+"' rows='4' style='width:100%;max-width:100%'>"+esc(cfg.get(key,''))+"</textarea></label>"
     fields+="<label><input type='checkbox' name='policies_ready' value='1' "+('checked' if cfg.get('policies_ready')=='1' else '')+"> 판매자 정보·개인정보 처리 안내·국외 처리/위탁 내용·배송/반품 정책의 실제 운영 내용을 검토하고 확정했습니다.</label>"
-    body+="<div class='card'><h2>배송·판매 정책</h2>"+form('/admin/sales/settings',fields,'설정 저장')+"</div><div class='card'><h2>서버 연결 항목</h2><p>인증메일: SOMANG_MAIL_API_KEY, SOMANG_MAIL_FROM</p><p>결제: SOMANG_TOSS_CLIENT_KEY, SOMANG_TOSS_SECRET_KEY, SOMANG_PAYMENT_MODE=test 또는 live</p><p>라이브 개시: 소망약국 명의 계약과 테스트 결제·취소 확인 후 SOMANG_LIVE_APPROVED=1</p><p>다른 사업의 결제키를 재사용하지 마세요.</p></div>"
+    body+="<div class='card'><h2>배송·판매 정책</h2>"+form('/admin/sales/settings',fields,'설정 저장')+"</div><div class='card'><h2>서버 연결 항목</h2><p>비밀번호 찾기 메일: SOMANG_MAIL_API_KEY, SOMANG_MAIL_FROM</p><p>결제: SOMANG_TOSS_CLIENT_KEY, SOMANG_TOSS_SECRET_KEY, SOMANG_PAYMENT_MODE=test 또는 live</p><p>라이브 개시: 소망약국 명의 계약과 테스트 결제·취소 확인 후 SOMANG_LIVE_APPROVED=1</p><p>다른 사업의 결제키를 재사용하지 마세요.</p></div>"
     return screen('판매 설정 · 연결 상태',body)
 
 @commerce.route('/admin/sales/products',methods=['GET','POST'])
@@ -405,13 +393,14 @@ def admin_products():
         if not name or category not in CATEGORIES or not 1<=price<=10000000 or not 0<=stock<=1000000:raise store.BusinessError('상품명·분류·가격·재고를 확인해 주세요.')
         with store.connect() as c:
             r=store.sql(c,'INSERT INTO commerce_products(name,category,description,price,stock) VALUES(?,?,?,?,?) RETURNING id',(name,category,request.form.get('description','')[:5000],price,stock)).fetchone()
+            if stock:store.sql(c,'INSERT INTO commerce_ops_stock_movements(product_id,change_qty,reason) VALUES(?,?,?)',(r['id'],stock,'상품 등록 초기 재고'))
             store.audit(c,'admin','product.created',r['id'])
         return redirect('/admin/sales/products')
     fields=field('name','상품명',extra="maxlength='100'")+"<label>분류<select name='category'>"+''.join('<option>'+esc(x)+'</option>' for x in CATEGORIES)+"</select></label>"+field('price','판매가 (원)','number',extra="min='1' max='10000000'")+field('stock','판매 가능 재고','number','0',extra="min='0' max='1000000'")+"<label>상품 상세·표시 정보<textarea name='description' rows='5' maxlength='5000' style='width:100%'></textarea></label>"
     body=admin_nav()+"<div class='card'><h2>실제 판매 상품 등록</h2><p>기존 체험 상품은 판매 대상에서 제외됩니다. 상품은 비공개로 생성됩니다.</p>"+form('/admin/sales/products',fields,'비공개 상품 등록')+"</div>"
     for p in store.products(True):
         body+="<div class='card'><h2>"+esc(p['name'])+"</h2><p>"+esc(p['category'])+' · '+f"{p['price']:,}원"+' · 재고 '+str(p['stock'])+"개</p>"
-        fields=field('price','판매가','number',str(p['price']),extra="min='1' max='10000000'")+field('stock_delta','재고 조정 (+입고 / -감소)','number','0',extra="min='-1000000' max='1000000'")
+        fields=field('name','상품명',value=p['name'],extra="maxlength='100'")+"<label>분류<select name='category'>"+''.join("<option "+('selected' if cat==p['category'] else '')+">"+esc(cat)+"</option>" for cat in CATEGORIES)+"</select></label>"+field('price','판매가','number',str(p['price']),extra="min='1' max='10000000'")+field('stock_delta','재고 조정 (+입고 / -감소)','number','0',extra="min='-1000000' max='1000000'")
         fields+="<label>상품 설명<textarea name='description' rows='4' maxlength='5000' style='width:100%'>"+esc(p['description'])+"</textarea></label><label><input name='compliance_checked' type='checkbox' value='1' "+('checked' if p['compliance_checked'] else '')+"> 비의약품이며 판매 자격·필수 표시·광고 내용을 확인했습니다.</label><label><input type='checkbox' name='published' value='1' "+('checked' if p['published'] else '')+"> 고객에게 공개</label>"
         body+=form('/admin/sales/products/'+str(p['id']),fields,'상품·재고 저장')+"</div>"
     return screen('실제 상품 · 재고 관리',body)
@@ -427,7 +416,11 @@ def admin_product_update(pid):
         p=store.sql(c,'SELECT * FROM commerce_products WHERE id=? FOR UPDATE',(pid,)).fetchone()
         if not p:abort(404)
         if p['stock']+delta<0:raise store.BusinessError('예약 재고를 제외한 판매 가능 재고가 부족합니다.')
+        name=request.form.get('name',p['name']).strip();category=request.form.get('category',p['category'])
+        if not 1<=len(name)<=100 or category not in CATEGORIES:raise store.BusinessError('상품명과 분류를 확인해 주세요.')
+        store.sql(c,'UPDATE commerce_products SET name=?,category=? WHERE id=?',(name,category,pid))
         store.sql(c,'UPDATE commerce_products SET price=?,stock=stock+?,description=?,published=?,compliance_checked=? WHERE id=?',(price,delta,request.form.get('description','')[:5000],published,compliant,pid))
+        if delta:store.sql(c,'INSERT INTO commerce_ops_stock_movements(product_id,change_qty,reason) VALUES(?,?,?)',(pid,delta,'상품 관리 재고 조정'))
         store.audit(c,'admin','product.updated',str(pid)+':stock_delta='+str(delta))
     return redirect('/admin/sales/products')
 
@@ -488,11 +481,11 @@ def admin_members():
     with store.connect() as c:
         rows=store.sql(c,'SELECT id,email,status,created_at,email_verified_at FROM members'+(' WHERE email=?' if q else '')+' ORDER BY id DESC LIMIT 100',(q,) if q else ()).fetchall()
         store.audit(c,'admin','members.viewed')
-    body=admin_nav()+"<form class='shop-search'><label>회원 이메일<input name='q' value='"+esc(q)+"'></label><button>조회</button></form><p>최근 100명 · 비밀번호와 인증 토큰은 표시하지 않습니다.</p>"
+    body=admin_nav()+"<form class='shop-search'><label>회원 이메일<input name='q' value='"+esc(q)+"'></label><button>조회</button></form><p>최근 100명 · 비밀번호는 표시하지 않습니다.</p>"
     for m in rows:
-        body+="<div class='card'><h2>"+esc(m['email'])+"</h2><p>"+{'pending':'인증 대기','active':'이용 중','suspended':'이용 중지','deleted':'탈퇴'}[m['status']]+"</p>"
-        if m['status'] in ('active','suspended'):
-            action='suspend' if m['status']=='active' else 'restore'
+        body+="<div class='card'><h2>"+esc(m['email'])+"</h2><p>"+{'pending':'이용 중','active':'이용 중','suspended':'이용 중지','deleted':'탈퇴'}[m['status']]+"</p>"
+        if m['status'] in ('active','pending','suspended'):
+            action='suspend' if m['status'] in ('active','pending') else 'restore'
             body+=form('/admin/members/'+str(m['id'])+'/'+action,'','이용 중지' if action=='suspend' else '중지 해제')
         body+="</div>"
     return screen('실제 회원 관리',body)
@@ -503,7 +496,7 @@ def admin_member_action(member_id,action):
     with store.connect() as c:
         r=store.sql(c,'SELECT * FROM members WHERE id=? FOR UPDATE',(member_id,)).fetchone()
         if not r:abort(404)
-        if r['status'] not in ('active','suspended') or not r['email_verified_at']:raise store.BusinessError('인증된 회원만 이용 상태를 변경할 수 있습니다.')
+        if r['status'] not in ('active','pending','suspended'):raise store.BusinessError('탈퇴한 회원은 상태를 변경할 수 없습니다.')
         store.sql(c,'UPDATE members SET status=?,auth_version=auth_version+1,updated_at=now() WHERE id=?',('suspended' if action=='suspend' else 'active',member_id));store.audit(c,'admin','member.'+action,member_id)
     return redirect('/admin/members')
 
@@ -534,8 +527,10 @@ def connection_status():
         store.sql(c,'SELECT number FROM commerce_orders LIMIT 0')
         store.sql(c,'SELECT id FROM commerce_products LIMIT 0')
         store.sql(c,'SELECT auth_version FROM members LIMIT 0')
+        store.sql(c,'SELECT id FROM commerce_ops_suppliers LIMIT 0')
+        store.sql(c,'SELECT id FROM commerce_ops_stock_movements LIMIT 0')
     return jsonify(database_configured=True,database_reachable=True,member_schema_ready=True,
-                   commerce_schema_ready=True,email_configured=__import__('somang_member_mail').mail_ready(),stable_session_configured=bool(os.environ.get('SOMANG_SECRET_KEY')),real_registration_enabled=registration_ready(),preview_only=False)
+                   commerce_schema_ready=True,email_configured=__import__('somang_member_mail').mail_ready(),stable_session_configured=bool(os.environ.get('SOMANG_SECRET_KEY')),real_registration_enabled=registration_ready(),email_verification_required=False,operations_schema_ready=True,preview_only=False)
 
 def public_payment_status():
     r=pay.readiness()
