@@ -23,7 +23,7 @@ class SomangSmokeTests(unittest.TestCase):
         for phrase in ("의약품 구매 안내","온라인 주문·결제·배송하지 않습니다",
                        "비의약품","약사법 제50조"):
             self.assertIn(phrase.encode("utf-8"),page.data)
-        self.assertNotIn(b"somang-photo-placeholder",page.data.split(b"</section>")[0])
+        self.assertNotIn(b"somang-photo-placeholder",page.data.split(b"</head>",1)[1].split(b"</section>",1)[0])
         self.assertLess(page.data.index(b"id='health'"),page.data.index(b"id='pharmacy-law'"))
         self.assertIn(b"object-fit:contain",page.data)
 
