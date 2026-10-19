@@ -72,7 +72,7 @@ def rate_limit(key,limit=10,seconds=900):
 
 def products(include_hidden=False):
     with connect() as c:
-        return [dict(r) for r in sql(c,'SELECT * FROM commerce_products'+('' if include_hidden else ' WHERE published=1 AND compliance_checked=1')+' ORDER BY id DESC').fetchall()]
+        return [dict(r) for r in sql(c,'SELECT p.*,i.digest AS image_digest FROM commerce_products p LEFT JOIN commerce_product_images i ON i.product_id=p.id'+('' if include_hidden else ' WHERE p.published=1 AND p.compliance_checked=1')+' ORDER BY p.id DESC').fetchall()]
 
 def member(member_id):
     with connect() as c:

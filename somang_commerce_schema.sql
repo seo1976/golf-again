@@ -44,3 +44,7 @@ CREATE TABLE IF NOT EXISTS commerce_returns (
  received INTEGER NOT NULL DEFAULT 0 CHECK(received IN (0,1)),
  restock INTEGER NOT NULL DEFAULT 0 CHECK(restock IN (0,1)),created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+CREATE TABLE IF NOT EXISTS commerce_product_images (
+ product_id BIGINT PRIMARY KEY REFERENCES commerce_products(id) ON DELETE CASCADE,
+ data BYTEA NOT NULL,digest CHAR(64) NOT NULL
+);

@@ -2,24 +2,25 @@
 import os,re,secrets,hashlib,time,json
 from datetime import timedelta
 from urllib.parse import quote,urlparse
-from flask import Blueprint,request,session,redirect,abort,jsonify,current_app,render_template_string
+from flask import Blueprint,request,session,redirect,abort,jsonify,current_app,render_template_string,send_file
 from werkzeug.security import generate_password_hash,check_password_hash
 from werkzeug.exceptions import HTTPException
 import somang_commerce_store as store
 import somang_commerce_payments as pay
+import somang_product_images as photos
 from somang_shop import page,esc,csrf,check
 commerce=Blueprint('commerce',__name__)
 CATEGORIES=('화장품','더마 화장품','두피·모발','생활용품')
 STATES={'pending':'결제 대기','checking':'결제 확인 중','paid':'결제 완료','preparing':'배송 준비','shipped':'배송 중','delivered':'배송 완료','cancelled':'주문 취소','refunded':'전액 환불','review':'관리자 확인 필요'}
 
-def form(action,body,label):
-    return "<form method='post' action='"+esc(action)+"'><input type='hidden' name='csrf' value='"+csrf()+"'>"+body+"<button>"+esc(label)+"</button></form>"
+def form(action,body,label,multipart=False):
+    return "<form method='post' "+("enctype='multipart/form-data' " if multipart else "")+"action='"+esc(action)+"'><input type='hidden' name='csrf' value='"+csrf()+"'>"+body+"<button>"+esc(label)+"</button></form>"
 
 def field(name,label,kind='text',value='',required=True,extra=''):
     return "<label>"+esc(label)+"<input name='"+name+"' type='"+kind+"' value='"+esc(value)+"' "+('required' if required else '')+" "+extra+"></label>"
 
 def screen(title,body):
-    return page(title,"<style>.commerce-nav{display:flex;gap:10px;flex-wrap:wrap;margin:12px 0}.commerce-status{display:inline-block;background:#e4f1e8;color:#20563d;padding:5px 9px;border-radius:8px;font-weight:700}input,select,textarea{font-size:16px}label input:not([type=checkbox]){display:block;width:100%;max-width:100%;min-height:44px}button{min-height:44px}table{width:100%;border-collapse:collapse}td,th{text-align:left;padding:10px;border-bottom:1px solid #dbe8df}.commerce-scroll{overflow-x:auto}.commerce-nav a{padding:9px;background:#e6f1e9;border-radius:8px}.commerce-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px}.commerce-cards .card{margin:0}a:focus-visible,button:focus-visible,input:focus-visible{outline:3px solid #247b9b;outline-offset:2px}.commerce-help{padding:12px;border-left:3px solid #54779a;background:#eef5fa;margin:12px 0}</style>"+body)
+    return page(title,"<style>.product-photo{display:block;width:100%;height:220px;object-fit:contain;background:#fff;border-radius:12px}.product-photo-detail{height:auto;max-height:480px;margin-bottom:18px}.product-photo-field{display:block;margin:14px 0;padding:14px;background:#f0f7f3;border-radius:10px}.product-photo-field small{display:block;margin-top:6px}.product-upload-preview{max-width:220px;max-height:220px;object-fit:contain;margin-top:10px}.product-photo-field input{padding:10px 0}.commerce-nav{display:flex;gap:10px;flex-wrap:wrap;margin:12px 0}.commerce-status{display:inline-block;background:#e4f1e8;color:#20563d;padding:5px 9px;border-radius:8px;font-weight:700}input,select,textarea{font-size:16px}label input:not([type=checkbox]){display:block;width:100%;max-width:100%;min-height:44px}button{min-height:44px}table{width:100%;border-collapse:collapse}td,th{text-align:left;padding:10px;border-bottom:1px solid #dbe8df}.commerce-scroll{overflow-x:auto}.commerce-nav a{padding:9px;background:#e6f1e9;border-radius:8px}.commerce-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px}.commerce-cards .card{margin:0}a:focus-visible,button:focus-visible,input:focus-visible{outline:3px solid #247b9b;outline-offset:2px}.commerce-help{padding:12px;border-left:3px solid #54779a;background:#eef5fa;margin:12px 0}</style>"+body)
 
 def message(text,title='안내',code=200):
     return screen(title,"<div class='card'>"+esc(text)+"<p><a href='/account'>내 계정</a> · <a href='/shop'>상품 보기</a></p></div>"),code
@@ -173,14 +174,14 @@ def catalog():
     if sort in ('price_asc','price_desc'):rows.sort(key=lambda p:p['price'],reverse=sort=='price_desc')
     body="<form class='shop-search'><label>상품 검색<input name='q' value='"+esc(q)+"'></label><label>정렬<select name='sort'><option value=''>기본순</option><option value='price_asc'>낮은 가격순</option><option value='price_desc'>높은 가격순</option></select></label><button>검색</button><a href='/shop'>전체 상품</a></form><div class='demo-grid'>"
     for p in rows:
-        body+="<article class='card product-card'><div class='product-art'>🛍️</div><div class='product-info'><small>"+esc(p['category'])+"</small><h2><a href='/shop/product/"+str(p['id'])+"'>"+esc(p['name'])+"</a></h2><p>"+esc(p['description'][:120])+"</p><strong>"+f"{p['price']:,}원"+"</strong><a class='btn' href='/shop/product/"+str(p['id'])+"'>"+('상품 보기' if p['stock'] else '품절')+"</a></div></article>"
+        body+="<article class='card product-card'>"+photos.html(p)+"<div class='product-info'><small>"+esc(p['category'])+"</small><h2><a href='/shop/product/"+str(p['id'])+"'>"+esc(p['name'])+"</a></h2><p>"+esc(p['description'][:120])+"</p><strong>"+f"{p['price']:,}원"+"</strong><a class='btn' href='/shop/product/"+str(p['id'])+"'>"+('상품 보기' if p['stock'] else '품절')+"</a></div></article>"
     if not rows:body+="<div class='card'>등록된 판매 상품이 없습니다. 상품 입고 후 안내하겠습니다.</div>"
     return screen('소망약국 온라인 상품',body+"</div>")
 
 def product_detail(pid):
     p=next((p for p in store.products() if p['id']==pid),None)
     if not p:abort(404)
-    body="<p><a href='/shop'>← 상품 목록</a></p><div class='card'><small>"+esc(p['category'])+"</small><h2>"+esc(p['name'])+"</h2><p>"+esc(p['description'])+"</p><strong>"+f"{p['price']:,}원"+"</strong>"
+    body="<p><a href='/shop'>← 상품 목록</a></p><div class='card'>"+photos.html(p,True)+"<small>"+esc(p['category'])+"</small><h2>"+esc(p['name'])+"</h2><p>"+esc(p['description'])+"</p><strong>"+f"{p['price']:,}원"+"</strong>"
     body+=(form('/cart/add',"<input type='hidden' name='product_id' value='"+str(pid)+"'>"+field('quantity','수량','number','1',extra="min='1' max='20'"),'장바구니 담기') if p['stock'] else '<p>품절입니다.</p>')
     return screen(p['name'],body+"<p><a href='/members/terms'>배송·반품 안내</a></p></div>")
 
@@ -391,19 +392,24 @@ def admin_products():
         except ValueError:raise store.BusinessError('가격과 재고를 확인해 주세요.')
         name=request.form.get('name','').strip()[:100];category=request.form.get('category','')
         if not name or category not in CATEGORIES or not 1<=price<=10000000 or not 0<=stock<=1000000:raise store.BusinessError('상품명·분류·가격·재고를 확인해 주세요.')
+        photo=photos.prepare(request.files.get('image'))
         with store.connect() as c:
             r=store.sql(c,'INSERT INTO commerce_products(name,category,description,price,stock) VALUES(?,?,?,?,?) RETURNING id',(name,category,request.form.get('description','')[:5000],price,stock)).fetchone()
+            if photo:photos.save(c,r['id'],photo)
             if stock:store.sql(c,'INSERT INTO commerce_ops_stock_movements(product_id,change_qty,reason) VALUES(?,?,?)',(r['id'],stock,'상품 등록 초기 재고'))
             store.audit(c,'admin','product.created',r['id'])
         return redirect('/admin/sales/products')
     fields=field('name','상품명',extra="maxlength='100'")+"<label>분류<select name='category'>"+''.join('<option>'+esc(x)+'</option>' for x in CATEGORIES)+"</select></label>"+field('price','판매가 (원)','number',extra="min='1' max='10000000'")+field('stock','판매 가능 재고','number','0',extra="min='0' max='1000000'")+"<label>상품 상세·표시 정보<textarea name='description' rows='5' maxlength='5000' style='width:100%'></textarea></label>"
-    body=admin_nav()+"<div class='card'><h2>실제 판매 상품 등록</h2><p>기존 체험 상품은 판매 대상에서 제외됩니다. 상품은 비공개로 생성됩니다.</p>"+form('/admin/sales/products',fields,'비공개 상품 등록')+"</div>"
+    fields+=photos.field()
+    body=admin_nav()+"<div class='card'><h2>실제 판매 상품 등록</h2><p>기존 체험 상품은 판매 대상에서 제외됩니다. 상품은 비공개로 생성됩니다.</p>"+form('/admin/sales/products',fields,'비공개 상품 등록',multipart=True)+"</div>"
     for p in store.products(True):
-        body+="<div class='card'><h2>"+esc(p['name'])+"</h2><p>"+esc(p['category'])+' · '+f"{p['price']:,}원"+' · 재고 '+str(p['stock'])+"개</p>"
+        body+="<div class='card'>"+photos.html(p)+"<h2>"+esc(p['name'])+"</h2><p>"+esc(p['category'])+' · '+f"{p['price']:,}원"+' · 재고 '+str(p['stock'])+"개</p>"
         fields=field('name','상품명',value=p['name'],extra="maxlength='100'")+"<label>분류<select name='category'>"+''.join("<option "+('selected' if cat==p['category'] else '')+">"+esc(cat)+"</option>" for cat in CATEGORIES)+"</select></label>"+field('price','판매가','number',str(p['price']),extra="min='1' max='10000000'")+field('stock_delta','재고 조정 (+입고 / -감소)','number','0',extra="min='-1000000' max='1000000'")
         fields+="<label>상품 설명<textarea name='description' rows='4' maxlength='5000' style='width:100%'>"+esc(p['description'])+"</textarea></label><label><input name='compliance_checked' type='checkbox' value='1' "+('checked' if p['compliance_checked'] else '')+"> 비의약품이며 판매 자격·필수 표시·광고 내용을 확인했습니다.</label><label><input type='checkbox' name='published' value='1' "+('checked' if p['published'] else '')+"> 고객에게 공개</label>"
-        body+=form('/admin/sales/products/'+str(p['id']),fields,'상품·재고 저장')+"</div>"
-    return screen('실제 상품 · 재고 관리',body)
+        fields+=photos.field()
+        if p.get('image_digest'):fields+="<label><input type='checkbox' name='remove_image' value='yes'> 현재 사진 삭제 (새 사진을 선택하면 새 사진으로 교체)</label>"
+        body+=form('/admin/sales/products/'+str(p['id']),fields,'상품·재고 저장',multipart=True)+"</div>"
+    return screen('실제 상품 · 재고 관리',body+photos.PREVIEW_SCRIPT)
 
 @commerce.post('/admin/sales/products/<int:pid>')
 def admin_product_update(pid):
@@ -412,6 +418,7 @@ def admin_product_update(pid):
     except ValueError:abort(400)
     compliant=int(request.form.get('compliance_checked')=='1');published=int(request.form.get('published')=='1')
     if not 1<=price<=10000000 or abs(delta)>1000000 or (published and not compliant):raise store.BusinessError('가격·재고 또는 판매 적법성 확인을 검토해 주세요.')
+    photo=photos.prepare(request.files.get('image'))
     with store.connect() as c:
         p=store.sql(c,'SELECT * FROM commerce_products WHERE id=? FOR UPDATE',(pid,)).fetchone()
         if not p:abort(404)
@@ -420,6 +427,8 @@ def admin_product_update(pid):
         if not 1<=len(name)<=100 or category not in CATEGORIES:raise store.BusinessError('상품명과 분류를 확인해 주세요.')
         store.sql(c,'UPDATE commerce_products SET name=?,category=? WHERE id=?',(name,category,pid))
         store.sql(c,'UPDATE commerce_products SET price=?,stock=stock+?,description=?,published=?,compliance_checked=? WHERE id=?',(price,delta,request.form.get('description','')[:5000],published,compliant,pid))
+        if photo:photos.save(c,pid,photo)
+        elif request.form.get('remove_image')=='yes':store.sql(c,'DELETE FROM commerce_product_images WHERE product_id=?',(pid,))
         if delta:store.sql(c,'INSERT INTO commerce_ops_stock_movements(product_id,change_qty,reason) VALUES(?,?,?)',(pid,delta,'상품 관리 재고 조정'))
         store.audit(c,'admin','product.updated',str(pid)+':stock_delta='+str(delta))
     return redirect('/admin/sales/products')
@@ -529,8 +538,9 @@ def connection_status():
         store.sql(c,'SELECT auth_version FROM members LIMIT 0')
         store.sql(c,'SELECT id FROM commerce_ops_suppliers LIMIT 0')
         store.sql(c,'SELECT id FROM commerce_ops_stock_movements LIMIT 0')
+        store.sql(c,'SELECT product_id FROM commerce_product_images LIMIT 0')
     return jsonify(database_configured=True,database_reachable=True,member_schema_ready=True,
-                   commerce_schema_ready=True,email_configured=__import__('somang_member_mail').mail_ready(),stable_session_configured=bool(os.environ.get('SOMANG_SECRET_KEY')),real_registration_enabled=registration_ready(),email_verification_required=False,operations_schema_ready=True,preview_only=False)
+                   commerce_schema_ready=True,email_configured=__import__('somang_member_mail').mail_ready(),stable_session_configured=bool(os.environ.get('SOMANG_SECRET_KEY')),real_registration_enabled=registration_ready(),email_verification_required=False,operations_schema_ready=True,product_images_ready=__import__('importlib.util',fromlist=['find_spec']).find_spec('PIL') is not None and __import__('importlib.util',fromlist=['find_spec']).find_spec('pillow_heif') is not None,preview_only=False)
 
 def public_payment_status():
     r=pay.readiness()
@@ -573,6 +583,11 @@ def install(app):
     for error_type in db_errors:app.register_error_handler(error_type,database_unavailable)
     app.config['PERMANENT_SESSION_LIFETIME']=timedelta(hours=2)
     app.config['MAX_CONTENT_LENGTH']=128*1024
+    @app.before_request
+    def product_upload_limit():
+        if request.method=='POST' and (request.path=='/admin/sales/products' or re.fullmatch(r'/admin/sales/products/[0-9]+',request.path)):
+            staff()
+            request.max_content_length=13*1024*1024
     app.before_request(dispatch)
     @app.before_request
     def commerce_guard():
@@ -620,3 +635,17 @@ def refund_return(number):
         store.sql(c,"UPDATE commerce_returns SET state='reviewed',received=1,restock=? WHERE order_number=?",(restock,number))
     pay.cancel(number,'admin',returned=True,restock=bool(restock))
     return redirect('/admin/sales/orders/'+number)
+
+@commerce.get('/media/products/<int:pid>/<digest>.jpg')
+def product_image(pid,digest):
+    if not re.fullmatch(r'[a-f0-9]{64}',digest):abort(404)
+    admin=bool(session.get('admin'))
+    if admin:staff()
+    with store.connect() as c:
+        r=store.sql(c,'SELECT i.data,i.digest FROM commerce_product_images i JOIN commerce_products p ON p.id=i.product_id WHERE p.id=? AND i.digest=?'+('' if admin else ' AND p.published=1 AND p.compliance_checked=1'),(pid,digest)).fetchone()
+    if not r:abort(404)
+    import io
+    response=send_file(io.BytesIO(bytes(r['data'])),mimetype='image/jpeg',download_name='product-'+str(pid)+'.jpg',etag=digest,conditional=True)
+    response.headers['Cache-Control']='private, no-store' if admin else 'public, max-age=0, must-revalidate'
+    response.headers['X-Content-Type-Options']='nosniff'
+    return response

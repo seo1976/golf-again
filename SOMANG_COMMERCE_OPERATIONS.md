@@ -46,3 +46,8 @@ Render 소망약국 서비스에 비밀값은 직접 설정한다. 값은 저장
 공급사·발주·수동 장부·재고 이동·로트·폐기·고객 가명 메모는 `commerce_ops_*` 테이블에 저장한다. `/admin/ops`는 판매와 같은 PostgreSQL을 사용하며, 상품·재고는 `commerce_products`에서 읽고 변경한다. 기존 SQLite 체험 데이터는 자동 복사하지 않는다. 환자·처방 정보는 수집하지 않는다.
 
 보고서 `/admin/reports/summary`는 HTML, `?format=json`은 기계 판독용 집계다. CSV는 관리자 전용이며 수식 삽입을 방지한다. 실제 결제 매출과 수동 장부 수입은 중복 합산하지 않는다. 로트 수량은 수동 관리이며 판매 주문의 자동 로트 배분은 별도 구축이 필요하다. 운영 재고 조정은 사유·이력을 함께 기록하고, 동시 변경 시 행 잠금으로 음수 재고와 중복 입고를 방지한다.
+
+## 상품 대표사진
+상품 등록/수정 폼은 multipart 파일 업로드와 로컬 미리보기를 지원한다. JPG/PNG/WebP/HEIC 파일은 최대 12MB이며 서버에서 픽셀을 검증하고 방향을 보정해 1600px 이하 JPEG로 재인코딩한다. EXIF 등 메타데이터와 원래 파일명은 저장하지 않는다. 파일은 임시 디스크 대신 `commerce_product_images`의 BYTEA에 저장되며 상품 변경과 같은 트랜잭션으로 반영된다. 비공개/미승인 상품 사진은 관리자만 볼 수 있고, 공개 사진도 상품 공개 여부를 매번 확인한다.
+
+현재 Render 빌드 명령에 사진 처리 의존성을 함께 설치하도록 `PIP_REQUIREMENT=somang_photos_requirements.txt`를 설정한다. 기존 Flask/gunicorn/psycopg 설치 인자는 유지한다. `/membership/connection-status`의 `product_images_ready`로 디코더 설치를 확인한다.
