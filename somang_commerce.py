@@ -37,7 +37,7 @@ def staff():
     admin()
 
 def admin_nav():
-    return "<nav class='commerce-nav'><a href='/admin/sales'>판매 대시보드</a><a href='/admin/sales/products'>상품·재고</a><a href='/admin/sales/orders'>주문·결제·배송</a><a href='/admin/members'>회원</a><a href='/admin/returns'>취소·반품</a><a href='/admin/sales/settings'>판매 설정</a><a href='/admin'>기존 운영 메뉴</a></nav>"+form('/admin/sales/logout','','관리자 로그아웃')
+    return "<nav class='commerce-nav'><a href='/admin/sales'>판매 대시보드</a><a href='/admin/sales/products'>상품·재고</a><a href='/admin/sales/orders'>주문·결제·배송</a><a href='/admin/members'>회원</a><a href='/admin/returns'>취소·반품</a><a href='/admin/sales/settings'>판매 설정</a><a href='/admin/ops'>기존 운영 메뉴</a></nav>"+form('/admin/sales/logout','','관리자 로그아웃')
 
 def origin():
     value=os.environ.get('SOMANG_PUBLIC_ORIGIN','https://somang-pharmacy-preview.onrender.com').rstrip('/')
@@ -206,7 +206,7 @@ def cart():
         except (TypeError,ValueError):q=0
         total+=price*max(0,q)
         body+="<div class='cart-line'><div><strong>"+esc(name)+"</strong><p>"+f'{price:,}원 × {q}개'+"</p></div>"+form('/cart/update',"<input name='product_id' type='hidden' value='"+esc(pid)+"'>"+field('quantity','수량 (0 입력 시 삭제)','number',str(q),extra="min='0' max='20'"),'변경')+"</div>"
-    body+="<h2>상품 합계 "+f'{total:,}원'+"</h2><a class='btn' href='/checkout'>배송지 입력 · 주문하기</a>"+form('/commerce/cart/clear','','장바구니 비우기')+"</div>"
+    body+="<h2>상품 합계 "+f'{total:,}원'+"</h2>"+("<a class='btn' href='/checkout'>배송지 입력 · 주문하기</a>" if session.get('cart') else "<p>장바구니가 비어 있습니다.</p><a class='btn' href='/shop'>상품 둘러보기</a>")+form('/commerce/cart/clear','','장바구니 비우기')+"</div>"
     return screen('장바구니',body)
 
 def cart_change():
@@ -542,6 +542,8 @@ def admin_logout():
 def dispatch():
     if not store.enabled():return None
     if request.path=='/admin' and request.method=='POST':throttle('admin-login',limit=5)
+    if request.path=='/admin' and request.method=='GET' and session.get('admin'):
+        staff();return redirect('/admin/sales')
     if request.path.startswith('/demo/') and request.method=='POST':abort(404)
     if request.path.startswith('/admin/returns') and request.method=='POST':raise store.BusinessError('주문 상세 화면에서 실제 취소·반품 요청을 처리해 주세요.')
     endpoint=request.endpoint or ''
