@@ -46,3 +46,25 @@ def send_verification_email(recipient, token):
         if not 200 <= response.status < 300:
             raise RuntimeError("Verification mail delivery failed")
     return True
+
+
+def send_account_email(recipient, token, purpose):
+    """Transactional, user-requested verification/reset. Token stays in URL fragment."""
+    if purpose not in ('verify', 'reset') or not mail_ready():
+        raise RuntimeError('Account email is not configured')
+    origin = os.environ.get('SOMANG_PUBLIC_ORIGIN', 'https://somang-pharmacy-preview.onrender.com').rstrip('/')
+    parsed = urlparse(origin)
+    if parsed.scheme != 'https' or not parsed.netloc or parsed.username or parsed.password or parsed.path:
+        raise RuntimeError('Invalid public origin')
+    from urllib.parse import quote
+    link = origin + '/members/' + purpose + ('?finish=1' if purpose == 'reset' else '') + '#token=' + quote(token, safe='')
+    label = '이메일 인증' if purpose == 'verify' else '비밀번호 재설정'
+    payload = {'from': os.environ['SOMANG_MAIL_FROM'], 'to': [recipient], 'subject': '소망약국 ' + label,
+               'text': '소망약국 ' + label + '을 요청하셨습니다. 30분 이내 아래 주소에서 완료해 주세요.\n' + link + '\n본인이 요청하지 않았다면 이 메일을 무시하세요.'}
+    req = Request('https://api.resend.com/emails', data=json.dumps(payload, ensure_ascii=False).encode(),
+                  headers={'Authorization': 'Bearer ' + os.environ['SOMANG_MAIL_API_KEY'], 'Content-Type': 'application/json',
+                           'Idempotency-Key': 'somang-' + __import__('hashlib').sha256(token.encode()).hexdigest()}, method='POST')
+    with urlopen(req, timeout=10) as response:
+        if not 200 <= response.status < 300:
+            raise RuntimeError('Account email failed')
+    return True
