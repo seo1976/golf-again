@@ -24,6 +24,14 @@ class SomangSmokeTests(unittest.TestCase):
                        "비의약품","약사법 제50조"):
             self.assertIn(phrase.encode("utf-8"),page.data)
 
+    def test_real_pharmacy_photo_is_served(self):
+        homepage=self.client.get("/")
+        self.assertIn(b"/static/somang-pharmacy-interior.jpg",homepage.data)
+        picture=self.client.get("/static/somang-pharmacy-interior.jpg")
+        self.assertEqual(picture.status_code,200)
+        self.assertIn("image/jpeg",picture.content_type)
+        self.assertGreater(len(picture.data),1000)
+
     def test_storefront(self):
         self.assertEqual(self.client.get("/shop").status_code,200)
         self.assertEqual(self.client.get("/cart").status_code,200)
