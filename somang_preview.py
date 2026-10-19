@@ -41,7 +41,7 @@ CSS="""<style>*{box-sizing:border-box}body{margin:0;font-family:Arial,'Apple SD 
  .somang-mobile-nav{z-index:30}
 }
 </style>"""
-<style>
+CSS += """<style>
 .somang-hero{grid-template-columns:1fr;max-width:1100px;margin:auto;padding-bottom:12px}
 .somang-hero>div:first-child{max-width:760px}
 #pharmacy-photo{background:#eef8f1;margin:12px 0 24px;padding:20px;border-radius:22px}
@@ -51,7 +51,7 @@ CSS="""<style>*{box-sizing:border-box}body{margin:0;font-family:Arial,'Apple SD 
 .somang-compact-law small{font-size:11px;color:#6b8074}
 .somang-health-grid .somang-category{min-height:145px}
 @media(max-width:700px){#pharmacy-photo{padding:15px;margin-top:8px}#pharmacy-photo img{max-height:235px!important}.somang-compact-law{font-size:12px;padding:10px}.somang-compact-law small{font-size:10px}.somang-health-grid .somang-category{min-height:125px}}
-</style>
+</style>"""
 def page(body,title="소망약국"):
     return render_template_string("<!doctype html><html lang='ko'><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><meta name='theme-color' content='#204338'><meta name='description' content='서울 종로구 창신동 소망약국 방문 안내. 종로 335, 1층. 전화 02-742-0075.'><title>{{title}}</title>"+CSS+"</head><body><header><a class='brand' href='/'>✚ 소망약국</a><nav><a class='nav-online-products' href='/online-products'>온라인 상품</a><a href='/account'>회원 로그인</a><a href='/#info'>약국 안내</a><a href='/admin'>관리자</a></nav></header>"+body+"<footer>소망약국 · 서울특별시 종로구 종로 335, 1층 (원풍빌딩)<br><a href='tel:027420075'>02-742-0075</a><br>온라인 판매 상품은 품목별 적법성 확인 후 제공됩니다.</footer><nav class='somang-mobile-nav' aria-label='모바일 빠른 메뉴'><a href='/'><span class='ico' aria-hidden='true'>⌂</span>홈</a><a href='/online-products'><span class='ico' aria-hidden='true'>▦</span>온라인 상품</a><a href='/cart'><span class='ico' aria-hidden='true'>🛒</span>장바구니</a><a href='/account'><span class='ico' aria-hidden='true'>♙</span>마이페이지</a></nav></body></html>",title=title)
 def csrf():
