@@ -125,15 +125,51 @@ class CommerceTests(unittest.TestCase):
         with patch.object(pay,'provider',return_value=self.payment(n)):
             r=self.client.post('/payments/webhook',json={'data':{'orderId':n,'paymentKey':'pg-'+n,'status':'CANCELED'}})
         self.assertEqual(r.status_code,200);self.assertEqual(self.state(n),'paid')
-    def test_real_login_and_unverified_denied(self):
+    def test_real_login_pending_account_cannot_order(self):
         self.assertEqual(self.client.post('/login',data={'csrf':'token','email':'one@example.com','password':'wrong'}).status_code,403)
         self.assertEqual(self.client.post('/login',data={'csrf':'token','email':'one@example.com','password':'password12345'}).status_code,302)
         with db.connect() as c:db.sql(c,"UPDATE members SET status='pending',email_verified_at=NULL WHERE id=1")
         with self.client.session_transaction() as s:s['csrf']='token'
-        self.assertEqual(self.client.post('/login',data={'csrf':'token','email':'one@example.com','password':'password12345'}).status_code,403)
+        self.assertEqual(self.client.post('/login',data={'csrf':'token','email':'one@example.com','password':'password12345'}).status_code,302)
+        self.assertEqual(self.client.get('/orders').status_code,401)
+        self.assertIn('회원가입이 완료되었습니다.',self.client.get('/account').get_data(as_text=True))
+    def test_signup_without_mail_or_sales_policy(self):
+        guest=app.test_client()
+        with guest.session_transaction() as s:s['csrf']='token'
+        with db.connect() as c:db.save_setting(c,'policies_ready','0')
+        with patch.dict(os.environ,{'SOMANG_MAIL_API_KEY':'','SOMANG_MAIL_FROM':''}), patch('somang_member_mail.send_account_email') as mail:
+            self.assertIn("name='password_confirm'",guest.get('/account').get_data(as_text=True))
+            data={'csrf':'token','email':'new@example.com','password':'newpassword1234','password_confirm':'newpassword1234','consent':'yes'}
+            self.assertEqual(guest.post('/register',data=data).status_code,200)
+            mail.assert_not_called()
+            with db.connect() as c:
+                r=db.sql(c,"SELECT * FROM members WHERE email='new@example.com'").fetchone()
+                self.assertEqual(r['status'],'pending');self.assertIsNone(r['email_verified_at'])
+                self.assertNotEqual(r['password_hash'],data['password'])
+                self.assertEqual(db.sql(c,'SELECT count(*) n FROM commerce_consents WHERE member_id=?',(r['id'],)).fetchone()['n'],1)
+            self.assertEqual(guest.post('/login',data=data).status_code,302)
+            self.assertIn('회원가입이 완료되었습니다.',guest.get('/account').get_data(as_text=True))
+            self.assertEqual(guest.get('/orders').status_code,401)
+            with self.assertRaises(db.BusinessError):db.create_order(r['id'],{'1':1},self.data(),self.data()['request_key'])
+            with guest.session_transaction() as s:token=s['csrf']
+            self.assertEqual(guest.post('/members/delete',data={'csrf':token,'password':data['password']}).status_code,200)
+    def test_signup_confirmation_and_duplicate_preserve_password(self):
+        data={'csrf':'token','email':'one@example.com','password':'differentpassword123','password_confirm':'mismatch','consent':'yes'}
+        self.assertEqual(self.client.post('/register',data=data).status_code,409)
+        data['password_confirm']=data['password']
+        self.assertEqual(self.client.post('/register',data=data).status_code,200)
+        self.assertEqual(self.client.post('/login',data=data).status_code,403)
+        data['password']='password12345'
+        self.assertEqual(self.client.post('/login',data=data).status_code,302)
+    def test_signup_mail_failure_keeps_account_and_consent(self):
+        data={'csrf':'token','email':'new@example.com','password':'newpassword1234','password_confirm':'newpassword1234','consent':'yes'}
+        with patch('somang_member_mail.send_account_email',side_effect=RuntimeError('offline')):
+            self.assertEqual(self.client.post('/register',data=data).status_code,200)
+        self.assertEqual(self.client.post('/login',data=data).status_code,302)
+        self.assertEqual(self.client.get('/orders').status_code,401)
     def test_registration_verify_and_one_time_token(self):
         with patch('somang_member_mail.send_account_email') as mail:
-            r=self.client.post('/register',data={'csrf':'token','email':'new@example.com','password':'newpassword1234','consent':'yes'})
+            r=self.client.post('/register',data={'csrf':'token','email':'new@example.com','password':'newpassword1234','password_confirm':'newpassword1234','consent':'yes'})
             self.assertEqual(r.status_code,200)
             raw=mail.call_args.args[1]
         with db.connect() as c:r=db.sql(c,"SELECT * FROM members WHERE email='new@example.com'").fetchone();self.assertEqual(r['status'],'pending')

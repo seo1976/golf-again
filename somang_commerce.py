@@ -24,11 +24,11 @@ def screen(title,body):
 def message(text,title='안내',code=200):
     return screen(title,"<div class='card'>"+esc(text)+"<p><a href='/account'>내 계정</a> · <a href='/shop'>상품 보기</a></p></div>"),code
 
-def current_member(required=True):
+def current_member(required=True, verified=True):
     mid=session.get('somang_auth_member_id')
     m=store.member(mid) if session.get('somang_auth_kind')=='persistent_member' and isinstance(mid,int) and not isinstance(mid,bool) else None
-    if not m or m['status']!='active' or not m['email_verified_at'] or session.get('somang_auth_version')!=m['auth_version']:
-        if required:abort(401,'회원 로그인이 필요합니다.')
+    if not m or m['status'] not in ('active','pending') or (verified and (m['status']!='active' or not m['email_verified_at'])) or session.get('somang_auth_version')!=m['auth_version']:
+        if required:abort(401,'이메일 인증 후 주문 기능을 이용할 수 있습니다. 내 계정에서 인증 상태를 확인해 주세요.' if m and m['status']=='pending' and session.get('somang_auth_version')==m['auth_version'] else '회원 로그인이 필요합니다.')
         return None
     return m
 
@@ -46,9 +46,9 @@ def origin():
     return value
 
 def registration_ready():
-    from somang_member_mail import mail_ready
-    with store.connect() as c:cfg=store.settings(c)
-    return bool(mail_ready() and os.environ.get('SOMANG_SECRET_KEY') and cfg.get('policies_ready')=='1')
+    # Account creation is independent of checkout and email delivery readiness.
+    with store.connect() as c:store.sql(c,'SELECT auth_version FROM members LIMIT 0')
+    return bool(os.environ.get('SOMANG_SECRET_KEY'))
 
 def throttle(action,email='',limit=10):
     # Ignore user-supplied forwarding headers. Shared-IP and per-account limits are durable.
@@ -61,27 +61,35 @@ def issue_token(c,mid,purpose):
     return raw
 
 def account():
-    m=current_member(False)
+    from somang_member_mail import mail_ready
+    m=current_member(False, verified=False)
     if m:
-        body="<div class='card'><h2>"+esc(m['email'])+"</h2><p>이메일 인증된 소망약국 회원입니다.</p><div class='account-shortcuts'><a class='btn' href='/shop'>상품 보기</a><a class='btn' href='/orders'>주문·배송 내역</a><a class='btn' href='/cart'>장바구니</a></div>"
+        body="<div class='card'><h2>"+esc(m['email'])+"</h2><p>소망약국 회원입니다.</p><div class='account-shortcuts'><a class='btn' href='/shop'>상품 보기</a><a class='btn' href='/cart'>장바구니</a></div>"
+        if m['email_verified_at']:body+="<p><a class='btn' href='/orders'>주문·배송 내역</a></p>"
+        if not m['email_verified_at']:
+            body+="<div class='commerce-help'><strong>회원가입이 완료되었습니다.</strong><p>이메일 인증 후 주문 기능을 이용할 수 있습니다.</p>"
+            if mail_ready():body+=form('/members/resend',"<input type='hidden' name='email' value='"+esc(m['email'])+"'>",'인증메일 받기')
+            else:body+="<p>인증메일 연결을 준비하고 있습니다. 가입 정보는 안전하게 저장되었습니다.</p>"
+            body+="</div>"
         body+=form('/logout','','로그아웃')+"<details><summary>회원 탈퇴</summary><p>진행 중인 주문은 처리 후 탈퇴할 수 있습니다. 주문·결제 기록은 거래 보존 정책에 따라 별도 보관됩니다.</p>"+form('/members/delete',field('password','현재 비밀번호','password',extra="maxlength='200' autocomplete='current-password'"),'비밀번호 확인 후 탈퇴')+"</details></div>"
     else:
         body="<div class='card'><h2>회원 로그인</h2>"+form('/login',field('email','이메일','email',extra="maxlength='254' autocomplete='email'")+field('password','비밀번호','password',extra="maxlength='200' autocomplete='current-password'"),'로그인')+"<a href='/members/reset'>비밀번호 재설정</a></div>"
         if registration_ready():
-            body+="<div class='card'><h2>회원가입</h2><p>이메일 인증 후 주문·배송 조회를 이용할 수 있어요.</p>"+form('/register',field('email','이메일','email',extra="maxlength='254' autocomplete='email'")+field('password','비밀번호 (12~200자)','password',extra="minlength='12' maxlength='200' autocomplete='new-password'")+"<label><input type='checkbox' name='consent' value='yes' required> <a href='/members/privacy'>개인정보 수집·이용</a> 및 <a href='/members/terms'>이용약관</a> 동의 (필수)</label>",'가입하고 인증메일 받기')+"</div>"
-        else:body+="<div class='commerce-help'>회원가입을 준비 중입니다. 인증메일과 판매자 정책 설정이 완료되면 가입할 수 있습니다.</div>"
-        body+="<details class='card'><summary>인증메일 다시 받기</summary>"+form('/members/resend',field('email','이메일','email'),'인증메일 재발송')+"</details>"
+            body+="<div class='card'><h2>회원가입</h2><p>이메일과 비밀번호로 가입할 수 있어요. 주문 기능은 이메일 인증 후 이용할 수 있습니다.</p>"+form('/register',field('email','이메일','email',extra="maxlength='254' autocomplete='email'")+field('password','비밀번호 (12~200자)','password',extra="minlength='12' maxlength='200' autocomplete='new-password'")+field('password_confirm','비밀번호 확인','password',extra="minlength='12' maxlength='200' autocomplete='new-password'")+"<label><input type='checkbox' name='consent' value='yes' required> <a href='/members/privacy'>개인정보 수집·이용</a> 및 <a href='/members/terms'>이용약관</a> 동의 (필수)</label>",'회원가입')+"</div>"
+        else:body+="<div class='commerce-help'>회원 서비스 연결을 확인 중입니다. 잠시 후 다시 이용해 주세요.</div>"
+        if mail_ready():body+="<details class='card'><summary>인증메일 다시 받기</summary>"+form('/members/resend',field('email','이메일','email'),'인증메일 재발송')+"</details>"
     return screen('소망약국 회원',body)
 
 def register():
     check()
-    if not registration_ready():return message('인증메일과 판매자 정책 설정 후 회원가입을 시작할 수 있습니다.',code=503)
+    if not registration_ready():return message('회원 서비스 연결을 확인 중입니다. 잠시 후 다시 이용해 주세요.',code=503)
     from somang_member_store import normalize_email
-    from somang_member_mail import send_account_email
+    from somang_member_mail import send_account_email, mail_ready
     try:email=normalize_email(request.form.get('email',''))
     except ValueError:raise store.BusinessError('이메일을 확인해 주세요.')
     pw=request.form.get('password','')
     if not 12<=len(pw)<=200 or request.form.get('consent')!='yes':raise store.BusinessError('12자 이상 비밀번호와 필수 동의를 확인해 주세요.')
+    if pw!=request.form.get('password_confirm',''):raise store.BusinessError('비밀번호 확인이 일치하지 않습니다.')
     throttle('register',email,3)
     raw=None
     with store.connect() as c:
@@ -89,10 +97,11 @@ def register():
         if r:
             store.sql(c,'INSERT INTO commerce_consents(member_id,version) VALUES(?,?)',(r['id'],'member-v1'))
             raw=issue_token(c,r['id'],'verify');store.audit(c,r['id'],'member.registered')
-    if raw:
+    if raw and mail_ready():
         try:send_account_email(email,raw,'verify')
-        except Exception:return message('인증메일을 보내지 못했습니다. 잠시 후 인증메일 재발송을 이용해 주세요.',code=503)
-    return message('가입 가능한 이메일이면 인증메일을 보냈습니다. 30분 내 이메일의 인증 버튼을 눌러 주세요.')
+        except Exception:
+            current_app.logger.warning('Account created; verification delivery unavailable')
+    return message('가입 신청을 처리했습니다. 입력한 이메일과 비밀번호로 로그인해 주세요. 이미 가입한 이메일은 기존 비밀번호를 이용해 주세요.')
 
 DUMMY_HASH=generate_password_hash('not-a-real-user-'+secrets.token_hex(20))
 def login():
@@ -101,7 +110,7 @@ def login():
     throttle('login',email)
     with store.connect() as c:r=store.sql(c,'SELECT * FROM members WHERE email=?',(email,)).fetchone()
     valid=check_password_hash(r['password_hash'] if r else DUMMY_HASH,pw)
-    if not valid or not r or r['status']!='active' or not r['email_verified_at']:return message('이메일·비밀번호 또는 이메일 인증 상태를 확인해 주세요.',code=403)
+    if not valid or not r or r['status'] not in ('active','pending'):return message('이메일·비밀번호 또는 계정 상태를 확인해 주세요.',code=403)
     cart=session.get('cart',{});session.clear();session.permanent=True
     session.update(somang_auth_kind='persistent_member',somang_auth_member_id=r['id'],somang_auth_version=r['auth_version'],cart=cart)
     return redirect('/account')
@@ -136,7 +145,8 @@ def token_flow(purpose):
 @commerce.post('/members/resend')
 def send_token_again():
     check()
-    if not registration_ready():return message('인증메일 설정 후 이용할 수 있습니다.',code=503)
+    from somang_member_mail import mail_ready
+    if not mail_ready():return message('인증메일 연결을 준비하고 있습니다. 가입한 계정으로 로그인할 수 있습니다.',code=503)
     email=request.form.get('email','').strip().lower()[:254];throttle('email',email,3)
     purpose='verify' if request.path.endswith('resend') else 'reset';raw=None
     with store.connect() as c:
@@ -150,7 +160,7 @@ def send_token_again():
 
 @commerce.post('/members/delete')
 def delete_member():
-    check();m=current_member();throttle('delete',m['email'],5)
+    check();m=current_member(verified=False);throttle('delete',m['email'],5)
     with store.connect() as c:
         r=store.sql(c,'SELECT * FROM members WHERE id=? FOR UPDATE',(m['id'],)).fetchone()
         if not check_password_hash(r['password_hash'],request.form.get('password','')[:200]):raise store.BusinessError('비밀번호를 확인해 주세요.')
