@@ -17,6 +17,13 @@ class SomangSmokeTests(unittest.TestCase):
         r=self.client.get("/health")
         self.assertEqual(r.status_code,200)
         self.assertFalse(r.json["payments_enabled"])
+    def test_homepage_pharmacy_law_notice(self):
+        page=self.client.get("/")
+        self.assertEqual(page.status_code,200)
+        for phrase in ("약사법 준수 안내","온라인 주문·결제·배송하지 않습니다",
+                       "비의약품","약사법 제50조"):
+            self.assertIn(phrase.encode("utf-8"),page.data)
+
     def test_storefront(self):
         self.assertEqual(self.client.get("/shop").status_code,200)
         self.assertEqual(self.client.get("/cart").status_code,200)
