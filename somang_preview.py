@@ -52,6 +52,33 @@ CSS += """<style>
 .somang-health-grid .somang-category{min-height:145px}
 @media(max-width:700px){ #pharmacy-photo{padding:15px;margin-top:8px}#pharmacy-photo img{max-height:none!important;max-width:340px!important}.somang-compact-law{font-size:12px;padding:10px}.somang-compact-law small{font-size:10px}.somang-health-grid .somang-category{min-height:125px}}
 </style>"""
+CSS += """<style>
+/* Compact homepage spacing without changing text size or navigation targets. */
+.somang-hero p{line-height:1.5}
+.somang-home h2{margin:0 0 10px;line-height:1.3}
+#pharmacy-photo{margin:0 0 20px;padding:0;line-height:1.5}
+#pharmacy-photo p{margin:0 0 14px;line-height:1.5}
+#health>p{margin:0 0 12px;line-height:1.5}
+.somang-health-grid{margin-top:12px}
+.somang-health-grid .somang-category{min-height:0;padding:14px}
+.somang-health-grid .emoji{display:block;line-height:1.15}
+.somang-health-grid h3{margin:8px 0 6px;line-height:1.3}
+.somang-health-grid .somang-category p{line-height:1.45}
+.somang-home .somang-visit{margin:16px 0 6px}
+.somang-home .somang-compact-law{gap:6px;line-height:1.45}
+.somang-home .somang-mini-info{margin-top:16px;padding:10px 6px}
+.somang-home .somang-legal-note{margin:4px 0 0;line-height:1.4}
+@media(max-width:700px){
+ .somang-hero{padding-top:24px;padding-bottom:12px}
+ .somang-hero h1{margin:8px 0 12px}
+ .somang-hero p{line-height:1.5}
+ .somang-hero .somang-actions{margin-top:14px}
+ main.somang-home{padding-top:18px;padding-bottom:22px}
+ #pharmacy-photo{margin:0 0 20px;padding:0}
+ .somang-health-grid .somang-category{min-height:0;padding:13px}
+ .somang-health-grid .somang-category p{line-height:1.45}
+}
+</style>"""
 def page(body,title="소망약국"):
     return render_template_string("<!doctype html><html lang='ko'><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><meta name='theme-color' content='#204338'><meta name='description' content='서울 종로구 창신동 소망약국 방문 안내. 종로 335, 1층. 전화 02-742-0075.'><title>{{title}}</title>"+CSS+"</head><body><header><a class='brand' href='/'>✚ 소망약국</a><nav><a class='nav-online-products' href='/online-products'>온라인 상품</a><a href='/account'>회원 로그인</a><a href='/#info'>약국 안내</a><a href='/admin'>관리자</a></nav></header>"+body+"<footer>소망약국 · 서울특별시 종로구 종로 335, 1층 (원풍빌딩)<br><a href='tel:027420075'>02-742-0075</a><br>온라인 판매 상품은 품목별 적법성 확인 후 제공됩니다.</footer><nav class='somang-mobile-nav' aria-label='모바일 빠른 메뉴'><a href='/'><span class='ico' aria-hidden='true'>⌂</span>홈</a><a href='/online-products'><span class='ico' aria-hidden='true'>▦</span>온라인 상품</a><a href='/cart'><span class='ico' aria-hidden='true'>🛒</span>장바구니</a><a href='/account'><span class='ico' aria-hidden='true'>♙</span>마이페이지</a></nav></body></html>",title=title)
 def csrf():
@@ -65,7 +92,7 @@ def admin():
 @app.get("/")
 def home():
     with db() as c: items=[dict(r) for r in c.execute("SELECT * FROM products WHERE approved=1 AND visible=1 AND stock>0 ORDER BY id DESC LIMIT 100")]
-    body="""<section class='somang-hero'><div><div class='tag'>서울 종로구 창신동 · SOMANG PHARMACY</div><h1>건강한 일상을 위한<br>소망약국</h1><p>매일 실천할 수 있는 건강 관리 정보를 전합니다.<br>건강 상담과 의약품 문의는 약국에 방문하거나 전화해 주세요.</p><div class='somang-actions'><a href='#health'>오늘의 건강 안내</a><a class='secondary' href='#info' onclick="document.getElementById('info').open=true">약국 방문 안내</a></div></div></section><main><section class='somang-health-note' id='pharmacy-photo'><h2>소망약국 둘러보기</h2><p>건강한 일상의 가까운 이웃, 소망약국입니다.</p><img src='/static/somang-pharmacy-interior.jpg' alt='소망약국 내부 사진' loading='lazy' style='display:block;width:100%;max-width:420px;height:auto;max-height:none;object-fit:contain;border-radius:12px;background:transparent;opacity:1;filter:contrast(1.1) saturate(1.06);image-rendering:auto'></section><section id='health'><h2>일상 건강 관리 가이드</h2><p class='muted'>누구나 실천할 수 있는 생활 속 건강 습관을 소개합니다.</p><div class='somang-categories somang-health-grid'><article class='somang-category'><span class='emoji'>💧</span><h3>수분 섭취</h3><p>목이 마를 때 물을 마시고 활동량과 날씨에 따라 조절하세요. 수분 섭취를 제한해야 하는 질환이 있다면 의료진 지침을 따르세요.</p></article><article class='somang-category'><span class='emoji'>🚶</span><h3>걷기와 움직임</h3><p>일상 속 걷기부터 시작해 보세요. 성인은 주당 중강도 신체 활동 150~300분이 권장되며, 건강 상태에 맞게 조절하세요.</p></article><article class='somang-category'><span class='emoji'>🌙</span><h3>편안한 수면 습관</h3><p>매일 비슷한 시간에 잠들고 일어나세요. 취침 전 카페인과 밝은 화면을 줄이는 습관이 도움이 됩니다.</p></article><article class='somang-category'><span class='emoji'>🧼</span><h3>손 씻기 습관</h3><p>식사 전과 외출 후에는 비누와 흐르는 물로 손을 씻으세요. 손바닥과 손가락 사이도 꼼꼼히 닦아 주세요.</p></article></div></section><details class='somang-visit' id='info'><summary>소망약국 방문 안내 <span>주소 · 전화 · 길찾기</span></summary><div class='somang-visit-detail'><p>서울특별시 종로구 종로 335, 1층 (원풍빌딩)</p><p>대표약사 최연화 · 02-742-0075</p><div class='somang-actions'><a class='secondary' href='https://map.naver.com/p/search/%EC%86%8C%EB%A7%9D%EC%95%BD%EA%B5%AD%20%EC%A2%85%EB%A1%9C%20335' target='_blank' rel='noopener noreferrer'>지도·길찾기 ↗</a></div><p class='muted' style='font-size:12px'>영업시간은 전화로 확인해 주세요.</p></div></details><section class='somang-compact-law' id='pharmacy-law'><strong>의약품 구매 안내</strong><span>일반의약품·전문의약품은 온라인 주문·결제·배송하지 않습니다. 온라인 판매 상품은 비의약품으로 한정합니다.</span><small>약사법 제50조 준수 · 의약품 문의는 약국 방문</small></section><div class='somang-mini-info'><span>소망약국 · 종로 335, 1층</span><a href='tel:027420075'>전화</a><a href='https://map.naver.com/p/search/%EC%86%8C%EB%A7%9D%EC%95%BD%EA%B5%AD%20%EC%A2%85%EB%A1%9C%20335' target='_blank' rel='noopener noreferrer'>길찾기 ↗</a></div><p class='somang-legal-note'>의약품 온라인 판매 불가 · 현재 주문·결제 준비 중</p></main>"""
+    body="""<section class='somang-hero'><div><div class='tag'>서울 종로구 창신동 · SOMANG PHARMACY</div><h1>건강한 일상을 위한<br>소망약국</h1><p>매일 실천할 수 있는 건강 관리 정보를 전합니다.<br>건강 상담과 의약품 문의는 약국에 방문하거나 전화해 주세요.</p><div class='somang-actions'><a href='#health'>오늘의 건강 안내</a><a class='secondary' href='#info' onclick="document.getElementById('info').open=true">약국 방문 안내</a></div></div></section><main class='somang-home'><section class='somang-health-note' id='pharmacy-photo'><h2>소망약국 둘러보기</h2><p>건강한 일상의 가까운 이웃, 소망약국입니다.</p><img src='/static/somang-pharmacy-interior.jpg' alt='소망약국 내부 사진' loading='lazy' style='display:block;width:100%;max-width:420px;height:auto;max-height:none;object-fit:contain;border-radius:12px;background:transparent;opacity:1;filter:contrast(1.1) saturate(1.06);image-rendering:auto'></section><section id='health'><h2>일상 건강 관리 가이드</h2><p class='muted'>누구나 실천할 수 있는 생활 속 건강 습관을 소개합니다.</p><div class='somang-categories somang-health-grid'><article class='somang-category'><span class='emoji'>💧</span><h3>수분 섭취</h3><p>목이 마를 때 물을 마시고 활동량과 날씨에 따라 조절하세요. 수분 섭취를 제한해야 하는 질환이 있다면 의료진 지침을 따르세요.</p></article><article class='somang-category'><span class='emoji'>🚶</span><h3>걷기와 움직임</h3><p>일상 속 걷기부터 시작해 보세요. 성인은 주당 중강도 신체 활동 150~300분이 권장되며, 건강 상태에 맞게 조절하세요.</p></article><article class='somang-category'><span class='emoji'>🌙</span><h3>편안한 수면 습관</h3><p>매일 비슷한 시간에 잠들고 일어나세요. 취침 전 카페인과 밝은 화면을 줄이는 습관이 도움이 됩니다.</p></article><article class='somang-category'><span class='emoji'>🧼</span><h3>손 씻기 습관</h3><p>식사 전과 외출 후에는 비누와 흐르는 물로 손을 씻으세요. 손바닥과 손가락 사이도 꼼꼼히 닦아 주세요.</p></article></div></section><details class='somang-visit' id='info'><summary>소망약국 방문 안내 <span>주소 · 전화 · 길찾기</span></summary><div class='somang-visit-detail'><p>서울특별시 종로구 종로 335, 1층 (원풍빌딩)</p><p>대표약사 최연화 · 02-742-0075</p><div class='somang-actions'><a class='secondary' href='https://map.naver.com/p/search/%EC%86%8C%EB%A7%9D%EC%95%BD%EA%B5%AD%20%EC%A2%85%EB%A1%9C%20335' target='_blank' rel='noopener noreferrer'>지도·길찾기 ↗</a></div><p class='muted' style='font-size:12px'>영업시간은 전화로 확인해 주세요.</p></div></details><section class='somang-compact-law' id='pharmacy-law'><strong>의약품 구매 안내</strong><span>일반의약품·전문의약품은 온라인 주문·결제·배송하지 않습니다. 온라인 판매 상품은 비의약품으로 한정합니다.</span><small>약사법 제50조 준수 · 의약품 문의는 약국 방문</small></section><div class='somang-mini-info'><span>소망약국 · 종로 335, 1층</span><a href='tel:027420075'>전화</a><a href='https://map.naver.com/p/search/%EC%86%8C%EB%A7%9D%EC%95%BD%EA%B5%AD%20%EC%A2%85%EB%A1%9C%20335' target='_blank' rel='noopener noreferrer'>길찾기 ↗</a></div><p class='somang-legal-note'>의약품 온라인 판매 불가 · 현재 주문·결제 준비 중</p></main>"""
     return page(body)
 @app.get("/online-products")
 def online_products():
